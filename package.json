@@ -1,0 +1,22 @@
+{
+  "name": "agent-learnings",
+  "version": "0.1.0",
+  "description": "Turn agent workflow improvements into reviewed, shareable learnings",
+  "repository": { "type": "git", "url": "git+https://github.com/shenmali/awesome-agent-learnings.git" },
+  "homepage": "https://github.com/shenmali/awesome-agent-learnings#readme",
+  "bugs": { "url": "https://github.com/shenmali/awesome-agent-learnings/issues" },
+  "type": "module",
+  "bin": { "agent-learnings": "./dist/cli.js" },
+  "files": ["dist", "README.md", "LICENSE"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "typescript": "^5.9.0"
+  },
+  "license": "MIT"
+}
