@@ -7,7 +7,9 @@ import { join } from 'node:path';
 
 const project = () => mkdtemp(join(tmpdir(), 'agent-learnings-cli-'));
 const bin = new URL('../dist/cli.js', import.meta.url).pathname.replace(/^\/(?=[A-Za-z]:)/, '');
-const run = (cwd, args, input) => spawnSync(process.execPath, [bin, ...args], { cwd, input, encoding: 'utf8' });
+// A missing gh binary keeps CLI tests offline and deterministic.
+const env = { ...process.env, AGENT_LEARNINGS_GH: join(tmpdir(), 'agent-learnings-no-gh') };
+const run = (cwd, args, input) => spawnSync(process.execPath, [bin, ...args], { cwd, input, encoding: 'utf8', env });
 
 test('CLI installs skills, stores an approved JSON draft, lists it, and previews an issue', async () => {
   const cwd = await project();
@@ -24,6 +26,9 @@ test('CLI installs skills, stores an approved JSON draft, lists it, and previews
   assert.equal(preview.status, 0, preview.stderr);
   assert.match(preview.stdout, /github.com\/obra\/superpowers\/issues\/new/);
   assert.match(preview.stdout, /I added an explicit review step/);
+  assert.match(preview.stdout, /Maintainer settings: not checked/);
+  assert.match(preview.stdout, /Duplicate check skipped/);
+  assert.match(preview.stdout, /--comment <issue-url>/);
   assert.match(await readFile(join(cwd, '.agent-learnings/learnings', `${id}.md`), 'utf8'), /## Observed result/);
 });
 

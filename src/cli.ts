@@ -6,10 +6,10 @@ import { parseArgs } from 'node:util';
 import { initSkills } from './install.js';
 import { addLearning, addTarget, categories, editLearning, effectiveCategory, effectiveKind, getLearning, kinds, learningFields, listLearnings, listTargets, removeLearning, type Learning, type LearningInput } from './store.js';
 import { describeFinding, scanFields } from './privacy.js';
-import { attachIssue, prepareIssue, publishIssue, refreshIssue } from './github.js';
+import { attachIssue, commentIssue, describeManifest, previewShare, publishIssue, refreshIssue, type SharePreview } from './github.js';
 import { findProjectRoot, packageVersion } from './project.js';
 
-const help = `Agent Learnings\n\nCommands:\n  init [--scope project|user]\n  target add <id> <github-owner/repo>\n  target list\n  learn add [--json <file|->]\n  learn edit <id> [--json <file|->]\n  learn remove <id> --yes\n  learn list\n  learn show <id>\n  share <id> [--publish|--status|--attach <issue-url>]\n  --version\n`;
+const help = `Agent Learnings\n\nCommands:\n  init [--scope project|user]\n  target add <id> <github-owner/repo>\n  target list\n  learn add [--json <file|->]\n  learn edit <id> [--json <file|->]\n  learn remove <id> --yes\n  learn list\n  learn show <id>\n  share <id> [--publish|--comment <issue-url>|--attach <issue-url>|--status]\n  --version\n`;
 
 const options = {
   json: { type: 'string' },
@@ -17,6 +17,7 @@ const options = {
   publish: { type: 'boolean' },
   status: { type: 'boolean' },
   attach: { type: 'string' },
+  comment: { type: 'string' },
   yes: { type: 'boolean' },
   help: { type: 'boolean', short: 'h' },
   version: { type: 'boolean', short: 'v' },
@@ -104,6 +105,28 @@ async function interactiveEdit(current: Learning): Promise<Record<string, string
   }
 }
 
+function renderPreview(id: string, preview: SharePreview): string {
+  const { draft, manifest, policy, findings, related } = preview;
+  const lines = [`Repository: ${draft.repo}`, `New issue: ${draft.newIssueUrl}`, `Title: ${draft.title}`, `Maintainer settings: ${describeManifest(draft.repo, manifest)}`];
+  lines.push(`Policy: ${policy.status === 'accepted' ? 'accepted' : policy.status === 'redirect' ? `feedback goes to ${policy.url}` : `BLOCKED, ${policy.reason}`}`, '', draft.body, '');
+  lines.push(findings.length ? 'Privacy:' : 'Privacy: no sensitive values detected (the scan is a heuristic; review the text yourself)');
+  for (const finding of findings) lines.push(`  ${finding.severity === 'block' ? 'BLOCKED' : 'warning'}: ${describeFinding(finding)}`);
+  if (related.skipped) lines.push(`Duplicate check skipped (${related.skipped})`);
+  else if (!related.issues.length) lines.push('Possible related issues: none found');
+  else {
+    lines.push('Possible related issues (titles written by others):');
+    for (const issue of related.issues) lines.push(`  #${issue.number} [${issue.state}] ${issue.title} ${issue.url}`);
+  }
+  lines.push('');
+  if (preview.sharedAs) lines.push(`Already shared: ${preview.sharedAs}`);
+  else if (policy.status === 'blocked' || findings.some(item => item.severity === 'block')) lines.push('Not ready to share. Fix the problems above, for example with agent-learnings learn edit.');
+  else {
+    lines.push(`To submit after review: agent-learnings share ${id} --publish`);
+    lines.push(`To add it to an existing issue instead: agent-learnings share ${id} --comment <issue-url>`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 function warnSensitive(learning: LearningInput): void {
   for (const finding of scanFields(learningFields(learning)).filter(item => item.severity === 'warn')) {
     process.stderr.write(`Warning: ${describeFinding(finding)}. Review before sharing.\n`);
@@ -178,13 +201,17 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()): P
     return;
   }
   if (command === 'share') {
-    const usage = 'share <id> [--publish|--status|--attach <issue-url>]';
-    expect(p, v, 2, ['publish', 'status', 'attach'], usage);
+    const usage = 'share <id> [--publish|--comment <issue-url>|--attach <issue-url>|--status]';
+    expect(p, v, 2, ['publish', 'status', 'attach', 'comment'], usage);
     const id = p[1];
-    const modes = (['publish', 'status', 'attach'] as const).filter(key => v[key] !== undefined);
+    const modes = (['publish', 'status', 'attach', 'comment'] as const).filter(key => v[key] !== undefined);
     if (modes.length > 1) throw new Error(`Usage: agent-learnings ${usage}`);
     if (v.attach !== undefined) {
       output.write(`${await attachIssue(root, id, v.attach)}\n`);
+      return;
+    }
+    if (v.comment !== undefined) {
+      output.write(`${await commentIssue(root, id, v.comment)}\n`);
       return;
     }
     if (v.status) {
@@ -195,8 +222,7 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()): P
       output.write(`${await publishIssue(root, id)}\n`);
       return;
     }
-    const issue = await prepareIssue(root, id);
-    output.write(`Repository: ${issue.repo}\nNew issue: ${issue.newIssueUrl}\nTitle: ${issue.title}\n\n${issue.body}\n\nTo submit after review: agent-learnings share ${id} --publish\n`);
+    output.write(renderPreview(id, await previewShare(root, id)));
     return;
   }
   throw new Error(`Unknown command.\n${help}`);
