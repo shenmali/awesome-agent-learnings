@@ -95,7 +95,7 @@ test('auto mode asks the agent once per session to save learnings without approv
   const first = JSON.parse(await runHook('claude:Stop', '{"session_id":"s1","stop_hook_active":false}', options));
   assert.equal(first.decision, 'block');
   assert.match(first.reason, /skill:superpowers:brainstorming/);
-  assert.match(first.reason, /node "\/opt\/plugin[\\/]dist[\\/]cli\.js" learn add --json <file> --auto/);
+  assert.ok(first.reason.includes(`node "${join('/opt/plugin', 'dist', 'cli.js')}" learn add --json <file> --auto`));
   assert.match(first.reason, /Never publish/);
   assert.match(first.systemMessage, /auto mode/);
   assert.equal(await runHook('claude:Stop', '{"session_id":"s1"}', options), '');
