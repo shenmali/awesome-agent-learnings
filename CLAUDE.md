@@ -25,7 +25,7 @@ No linter or formatter is configured. CI runs `npm ci && npm test && npm pack --
 
 ## Architecture
 
-- `src/cli.ts` is the entry point (`bin`). It parses arguments by position as `[command, action, value, extra]`. For `share`, `action` is the learning id and `value` is the flag. It calls `main()` at module load, so importing it runs the CLI. Tests use it only by spawning `dist/cli.js`.
+- `src/cli.ts` is the entry point (`bin`). It parses arguments with `node:util` `parseArgs` (strict, one shared options table). Each command checks its positional count and allowed flags with `expect()`, so unknown or misplaced flags are errors. It calls `main()` at module load, so importing it runs the CLI. Tests use it only by spawning `dist/cli.js`.
 - `src/project.ts` (`findProjectRoot`) walks up from cwd to the nearest directory containing `.git` and falls back to cwd. All commands resolve this root first. Learnings always live in the project, including with `init --scope user`.
 - `src/store.ts` holds all validation and persistence, under `<root>/.agent-learnings/`:
   - `config.json`: `{ schemaVersion: 1, targets: { <id>: { repo: "owner/repo" } } }`. Target ids match `^[a-z0-9]+(?:-[a-z0-9]+)*$`. Lookups use `Object.hasOwn`, which keeps prototype keys out. `normalizeRepo` accepts only `owner/repo` or a plain `https://github.com/...` URL.

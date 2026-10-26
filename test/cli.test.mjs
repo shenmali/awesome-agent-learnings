@@ -57,3 +57,28 @@ test('CLI attaches a manually opened GitHub issue', async () => {
   assert.equal(attached.status, 0, attached.stderr);
   assert.match(run(cwd, ['learn', 'show', id]).stdout, /issues\/77/);
 });
+
+test('CLI accepts option forms in any order and rejects unknown or conflicting options', async () => {
+  const cwd = await project();
+  run(cwd, ['target', 'add', 'superpowers', 'obra/superpowers']);
+  const draft = { target: 'superpowers', platform: 'codex', situation: 'x', change: 'y', result: 'z' };
+  const added = run(cwd, ['learn', 'add', '--json=-'], JSON.stringify(draft));
+  assert.equal(added.status, 0, added.stderr);
+  const id = added.stdout.match(/\d{8}-[a-f0-9]{8}/)?.[0];
+  assert.ok(id);
+  const attached = run(cwd, ['share', '--attach', 'https://github.com/obra/superpowers/issues/9', id]);
+  assert.equal(attached.status, 0, attached.stderr);
+  for (const args of [['share', id, '--publish', '--status'], ['learn', 'list', '--publish'], ['share', id, '--bogus'], ['learn', 'show'], ['target', 'add', 'only-id']]) {
+    const result = run(cwd, args);
+    assert.equal(result.status, 1, args.join(' '));
+    assert.match(result.stderr, /Usage|Unknown option/);
+  }
+  assert.match(run(cwd, ['--version']).stdout, /^\d+\.\d+\.\d+\n$/);
+});
+
+test('CLI interactive add fails instead of silently exiting when input ends', async () => {
+  const cwd = await project();
+  const result = run(cwd, ['learn', 'add'], '');
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /nothing was saved/);
+});

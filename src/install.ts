@@ -1,6 +1,7 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { packageVersion } from './project.js';
 
 export interface InstallOptions { scope: 'project' | 'user'; cwd: string; home?: string }
 
@@ -14,8 +15,7 @@ function skill(claude: boolean, command: string): string {
 
 export async function initSkills(options: InstallOptions): Promise<string[]> {
   const base = options.scope === 'user' ? (options.home ?? homedir()) : options.cwd;
-  const packageInfo = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
-  const command = options.scope === 'project' ? `npx --yes agent-learnings@${packageInfo.version}` : 'agent-learnings';
+  const command = options.scope === 'project' ? `npx --yes agent-learnings@${await packageVersion()}` : 'agent-learnings';
   const targets: Array<[string, boolean]> = [
     [join(base, '.agents', 'skills', 'agent-learnings', 'SKILL.md'), false],
     [join(base, '.claude', 'skills', 'agent-learnings', 'SKILL.md'), true],
