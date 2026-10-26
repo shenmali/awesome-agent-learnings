@@ -1,0 +1,5 @@
+interface:
+  display_name: "Capture a learning"
+  short_description: "Record reviewed feedback about an AI component"
+policy:
+  allow_implicit_invocation: false

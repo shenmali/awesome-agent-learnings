@@ -1,16 +1,16 @@
 {
   "name": "agent-learnings",
-  "version": "0.1.0",
-  "description": "Turn agent workflow improvements into reviewed, shareable learnings",
+  "version": "0.2.0",
+  "description": "A common feedback mechanism for the skills, agents, hooks, commands and MCP servers you use: reviewed learnings shared with their maintainers",
   "repository": { "type": "git", "url": "git+https://github.com/shenmali/awesome-agent-learnings.git" },
   "homepage": "https://github.com/shenmali/awesome-agent-learnings#readme",
   "bugs": { "url": "https://github.com/shenmali/awesome-agent-learnings/issues" },
   "type": "module",
-  "bin": { "agent-learnings": "./dist/cli.js" },
-  "files": ["dist", "README.md", "LICENSE"],
+  "bin": { "agent-learnings": "./plugins/agent-learnings/dist/cli.js" },
+  "files": ["plugins/agent-learnings/dist", "plugins/agent-learnings/.claude-plugin/plugin.json", "README.md", "LICENSE"],
   "engines": { "node": ">=20" },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/sync-plugin.mjs",
     "test": "npm run build && node --test",
     "prepack": "npm run build"
   },

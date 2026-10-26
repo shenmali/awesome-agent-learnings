@@ -1,0 +1,5 @@
+interface:
+  display_name: "Share a learning with maintainers"
+  short_description: "Send a saved learning to the maintainers"
+policy:
+  allow_implicit_invocation: false
