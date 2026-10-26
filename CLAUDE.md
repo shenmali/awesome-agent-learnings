@@ -4,46 +4,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`agent-learnings` is a zero-dependency Node.js CLI (TypeScript, ESM) that installs an agent skill for Codex, Claude Code, and OpenCode. It stores human-approved "learnings" (situation / change tried / observed result) as Markdown in the user's repository, and can propose them to a plugin's maintainers as GitHub issues through `gh`. README.md is the user-facing spec. Keep its CLI and storage descriptions in sync with code changes.
+`agent-learnings` is a common feedback mechanism for AI components (skills, agents, hooks, commands, MCP servers, plugins, prompts). It is a zero-dependency Node.js CLI (TypeScript, ESM) plus plugin packaging for Claude Code, Codex and OpenCode. Users capture human-approved "learnings" (situation / change tried / observed result) as Markdown in their repository and can share them with the component's maintainers as GitHub issues or comments through `gh`. README.md is the user-facing spec and docs/maintainers.md specifies the maintainer settings file and issue marker; keep both in sync with code changes.
 
 ## Commands
 
 ```sh
 npm ci
-npm run build                 # tsc -> dist/ (this is also the typecheck; strict mode)
+npm run build                 # tsc -> plugins/agent-learnings/dist, then scripts/sync-plugin.mjs regenerates plugins/agent-learnings/skills
 npm test                      # build, then `node --test` over test/*.test.mjs
-npm pack --dry-run            # CI also runs this; checks published contents (dist, README, LICENSE)
+npm pack --dry-run            # CI also runs this
 
-# Single file / single test (tests import ../dist, so build first)
+# Single file / single test (tests import the compiled output, so build first)
 npm run build && node --test test/core.test.mjs
 npm run build && node --test --test-name-pattern="manual body edits" test/core.test.mjs
 
-node dist/cli.js --help       # run the built CLI locally
+node plugins/agent-learnings/dist/cli.js --help
+claude plugin validate . --strict                         # marketplace
+claude plugin validate plugins/agent-learnings --strict   # plugin
 ```
 
-No linter or formatter is configured. CI runs `npm ci && npm test && npm pack --dry-run` on ubuntu, macOS, and Windows with Node 20, 22, and 24. Code must therefore run on Node 20 and handle Windows paths and CRLF line endings.
+No linter or formatter is configured; `npm run build` is the strict typecheck. CI runs on ubuntu, macOS and Windows with Node 20, 22 and 24, so code must run on Node 20 and handle Windows paths and CRLF. CI also fails if the committed build differs from a fresh one (`git diff --exit-code -- plugins/agent-learnings`).
+
+## Layout and build output
+
+- The repository root is a marketplace: `.claude-plugin/marketplace.json` (Codex reads it too) points at `plugins/agent-learnings/`, which is the plugin. The plugin directory deliberately has no package.json: with package.json plus a lockfile, Claude Code would install the dev dependencies into every user's plugin cache.
+- `plugins/agent-learnings/dist/` (compiled CLI) and `plugins/agent-learnings/skills/` (generated from `src/skills.ts`) are **committed**, because git-installed plugins get no build step. Rebuild and commit them with every source change; `test/plugin.test.mjs` fails when the skills are stale.
+- `packageVersion()` reads the version from `plugins/agent-learnings/.claude-plugin/plugin.json` (shipped in the plugin and in the npm package). A test keeps `package.json`, both plugin manifests and the marketplace entry consistent. A version bump changes the `npx --yes agent-learnings@<version>` command in skills written by `init`.
 
 ## Architecture
 
-- `src/cli.ts` is the entry point (`bin`). It parses arguments with `node:util` `parseArgs` (strict, one shared options table). Each command checks its positional count and allowed flags with `expect()`, so unknown or misplaced flags are errors. It calls `main()` at module load, so importing it runs the CLI. Tests use it only by spawning `dist/cli.js`.
-- `src/project.ts` (`findProjectRoot`) walks up from cwd to the nearest directory containing `.git` and falls back to cwd. All commands resolve this root first. Learnings always live in the project, including with `init --scope user`.
-- `src/store.ts` holds all validation and persistence, under `<root>/.agent-learnings/`:
-  - `config.json`: `{ schemaVersion: 1, targets: { <id>: { repo: "owner/repo" } } }`. Target ids match `^[a-z0-9]+(?:-[a-z0-9]+)*$`. Lookups use `Object.hasOwn`, which keeps prototype keys out. `normalizeRepo` accepts only `owner/repo` or a plain `https://github.com/...` URL.
-  - `learnings/<YYYYMMDD>-<8 hex>.md`: front matter with one `key: <JSON value>` per line. The approved text sits in a `content` JSON object. `parseLearning` re-renders the Markdown body from the metadata and **throws if the file body differs**, so a hand-edited body cannot be silently published. As a result, any change to `renderBody` or `renderLearning` makes existing records unreadable. Treat those functions as an on-disk format.
-  - New records are written with `flag: 'wx'` and are never overwritten. Updates go through `writeReplace`: write a temp file, then rename, falling back to copy on `EPERM`/`EXDEV` for Windows.
-- `src/github.ts` handles sharing. All `gh` calls go through an injectable `GhRunner`, whose default is `runGh` (`execFile`). Tests pass fake runners and never call real `gh`.
-  - `prepareIssue` builds the preview. `publishIssue` and `attachIssue` run inside a per-learning `<id>.share.lock` created with `open(..., 'wx')`, and both refuse a learning that already has an `issueUrl`.
-  - The issue body goes to `gh` through `--body-file` (a temp file), never through `--body`.
-  - When `gh` is missing (`ENOENT`) or reports an auth error in stderr, the code returns manual-submission text instead of throwing. Any other non-zero exit throws.
-  - Issue URLs from `gh` stdout or `--attach` must match `https://github.com/<mapped repo>/issues/<n>`.
-- `src/install.ts` (`initSkills`) generates two `SKILL.md` files and never overwrites existing ones:
-  - `.agents/skills/agent-learnings/` for Codex and OpenCode, with `opencode/*` metadata.
-  - `.claude/skills/agent-learnings/` with `disable-model-invocation: true`.
-  - Project scope pins `npx --yes agent-learnings@<version>`, reading the version at runtime from `../package.json` relative to `dist/`. A version bump changes generated skills and requires updating the `0.1.0` assertion in `test/core.test.mjs` and the README.
+- `src/cli.ts` is the entry point (`bin`). It parses arguments with `node:util` `parseArgs` (strict, one shared options table). Each command checks its positional count and allowed flags with `expect()`, so unknown or misplaced flags are errors. It runs at module load: `hook ...` goes to `hookMain` (never fails, 2 s watchdog), everything else to `main()`. Tests use it only by spawning the built `cli.js`.
+- `src/project.ts`: `findProjectRoot` walks up to the nearest directory containing `.git` (falls back to cwd). All data lives under `<root>/.agent-learnings/`, including with `init --scope user`.
+- `src/store.ts` holds validation and persistence:
+  - `config.json`: `{ schemaVersion: 1, targets: { <id>: { repo } }, reminders?: boolean }`. Unknown keys are preserved; target lookups use `Object.hasOwn`.
+  - `learnings/<YYYYMMDD>-<8 hex>.md`: one `key: <JSON value>` front-matter line per field (keys must match `^[A-Za-z]+$`), approved text in a `content` object. `parseLearning` re-renders the body and **throws if the file body differs**. `renderBody` is a frozen on-disk format: new fields (`kind`, `component`, `category`, `commentUrl`) go in the front matter only, and are written only when set, so 0.1.0 records round-trip byte for byte. Defaults (`kind` other, `category` improvement) are applied at read time by `effectiveKind`/`effectiveCategory`, never written.
+  - `normalizeInput` rejects unknown fields. New records use `flag: 'wx'`; rewrites go through `writeReplace` (temp file + rename, copy fallback on EPERM/EXDEV).
+  - `withLearningLock` (`<id>.share.lock`, created with `open(..., 'wx')`) guards publish, comment, attach, status refresh, `editLearning` and `removeLearning`. `updateLearning` is the lock-free internal writer for share state; callers hold the lock.
+- `src/privacy.ts`: regex scan with `block` findings (tokens, keys, credentials) that `assertNoSecrets` turns into errors on add, edit and every share path, and `warn` findings (email, home paths, IPs). Messages carry hints, never the value; tests build fake secrets by string concatenation so secret scanners do not flag them.
+- `src/manifest.ts`: parses maintainer settings (`.github/agent-learnings.json`) strictly and decides the `Policy` (accepted / blocked / redirect). No free-text fields by design.
+- `src/github.ts`: all `gh` calls go through an injectable `GhRunner` (default `runGh`, which honours `AGENT_LEARNINGS_GH`). `previewShare` fetches the manifest and searches related issues using only the component name or title prefix; GitHub text is cleaned of control and bidi characters. `publishIssue`/`commentIssue` share `shareable()` checks, send the body through `--body-file`, fall back to manual-submission text when `gh` is missing (`ENOENT`) or unauthenticated, and validate URLs with `parseIssueUrl`. Issue bodies end with an escaped `<!-- agent-learnings {...} -->` marker.
+- `src/reminders.ts`: opt-in reminder core behind `hook <platform:Event>`. The `claude` adapter maps PostToolUse (Skill, Agent/Task, `mcp__*`), UserPromptExpansion, Stop and SessionEnd; state is a hashed session file holding component names only. `runHook` never throws. Hook wiring lives in `plugins/agent-learnings/hooks/hooks.json`; `test/plugin.test.mjs` checks that its events match `claudeEvents`.
+- `src/skills.ts` is the single source of the agent instructions: `pluginFiles()` for the plugin, `renderSkill`/`renderOpencodeCommand`/`renderOpenaiYaml` for `src/install.ts` (`init --platform`, which never overwrites files).
 
 ## Conventions
 
-- ESM with `module: NodeNext`, so relative imports in `src/` need `.js` extensions.
-- Keep the package free of runtime dependencies (Node built-ins only).
-- Platform values (`codex | claude | opencode`) are repeated in several places: the `Platform` type and `requirePlatform` in `store.ts`, the interactive prompt in `cli.ts`, and the README. Adding a platform means updating all of them.
-- Tests are plain `.mjs` files using `node:test` and `node:assert/strict`. Each test runs in a fresh `mkdtemp` directory.
+- ESM with `module: NodeNext`: relative imports in `src/` need `.js` extensions.
+- No runtime dependencies (Node built-ins only).
+- Enumerations live in `store.ts` (`platforms`, `kinds`, `categories`); the interactive prompts in `cli.ts`, the skill text in `skills.ts`, README and docs/maintainers.md repeat them.
+- Tests are `.mjs` files using `node:test` and `node:assert/strict`, each in a fresh `mkdtemp` directory. GitHub tests use the routed `fakeGh` helper; CLI tests set `AGENT_LEARNINGS_GH` to a missing binary so they never reach the network.
