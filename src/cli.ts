@@ -4,12 +4,13 @@ import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { parseArgs } from 'node:util';
 import { initSkills } from './install.js';
-import { addLearning, addTarget, categories, editLearning, effectiveCategory, effectiveKind, getLearning, kinds, learningFields, listLearnings, listTargets, removeLearning, type Learning, type LearningInput } from './store.js';
+import { addLearning, addTarget, categories, editLearning, effectiveCategory, effectiveKind, getLearning, getReminders, kinds, learningFields, listLearnings, listTargets, removeLearning, setReminders, type Learning, type LearningInput } from './store.js';
+import { envReminders, runHook } from './reminders.js';
 import { describeFinding, scanFields } from './privacy.js';
 import { attachIssue, commentIssue, describeManifest, previewShare, publishIssue, refreshIssue, type SharePreview } from './github.js';
 import { findProjectRoot, packageVersion } from './project.js';
 
-const help = `Agent Learnings\n\nCommands:\n  init [--scope project|user]\n  target add <id> <github-owner/repo>\n  target list\n  learn add [--json <file|->]\n  learn edit <id> [--json <file|->]\n  learn remove <id> --yes\n  learn list\n  learn show <id>\n  share <id> [--publish|--comment <issue-url>|--attach <issue-url>|--status]\n  --version\n`;
+const help = `Agent Learnings\n\nCommands:\n  init [--scope project|user]\n  target add <id> <github-owner/repo>\n  target list\n  learn add [--json <file|->]\n  learn edit <id> [--json <file|->]\n  learn remove <id> --yes\n  learn list\n  learn show <id>\n  share <id> [--publish|--comment <issue-url>|--attach <issue-url>|--status]\n  config reminders [on|off]\n  --version\n`;
 
 const options = {
   json: { type: 'string' },
@@ -225,10 +226,55 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()): P
     output.write(renderPreview(id, await previewShare(root, id)));
     return;
   }
+  if (command === 'config' && action === 'reminders') {
+    const usage = 'config reminders [on|off]';
+    if (p.length === 2) {
+      expect(p, v, 2, [], usage);
+      const configured = await getReminders(root);
+      const fromEnv = envReminders(process.env);
+      const state = fromEnv ?? configured ?? false;
+      const source = fromEnv !== undefined ? 'AGENT_LEARNINGS_REMINDERS' : configured !== undefined ? '.agent-learnings/config.json' : 'default';
+      output.write(`Reminders: ${state ? 'on' : 'off'} (${source})\n`);
+      return;
+    }
+    expect(p, v, 3, [], usage);
+    if (p[2] !== 'on' && p[2] !== 'off') throw new Error(`Usage: agent-learnings ${usage}`);
+    await setReminders(root, p[2] === 'on');
+    output.write(`Reminders ${p[2]} for this project (.agent-learnings/config.json). AGENT_LEARNINGS_REMINDERS overrides this per user.\n`);
+    return;
+  }
   throw new Error(`Unknown command.\n${help}`);
 }
 
-main().catch(error => {
-  console.error(`Error: ${(error as Error).message}`);
-  process.exitCode = 1;
-});
+async function readLimited(max: number): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of input) {
+    size += chunk.length;
+    if (size <= max) chunks.push(chunk as Buffer);
+  }
+  return size > max ? '' : Buffer.concat(chunks).toString('utf8');
+}
+
+// Hidden entry point for agent hooks: `hook <platform:Event> [payload]`. It must never fail or hang the host agent.
+async function hookMain(args: string[]): Promise<void> {
+  setTimeout(() => process.exit(0), 2000).unref();
+  output.on('error', () => {});
+  try {
+    const result = await runHook(args[0] ?? '', args[1] ?? await readLimited(4 * 1024 * 1024));
+    if (result) output.write(`${result}\n`);
+  } catch {
+    // runHook already swallows errors; this guards stdin failures.
+  }
+  process.exitCode = 0;
+}
+
+const argv = process.argv.slice(2);
+if (argv[0] === 'hook') {
+  void hookMain(argv.slice(1));
+} else {
+  main(argv).catch(error => {
+    console.error(`Error: ${(error as Error).message}`);
+    process.exitCode = 1;
+  });
+}

@@ -34,6 +34,7 @@ export interface Learning extends LearningInput {
 interface Config {
   schemaVersion: 1;
   targets: Record<string, { repo: string }>;
+  reminders?: boolean;
 }
 
 const inputKeys = ['target', 'platform', 'version', 'kind', 'component', 'category', 'situation', 'change', 'result'];
@@ -44,7 +45,7 @@ const configPath = (root: string) => join(dataDir(root), 'config.json');
 const validId = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const validLearningId = /^\d{8}-[a-f0-9]{8}$/;
 
-async function writeReplace(path: string, content: string): Promise<void> {
+export async function writeReplace(path: string, content: string): Promise<void> {
   const temporary = `${path}.${randomBytes(6).toString('hex')}.tmp`;
   try {
     await writeFile(temporary, content, { encoding: 'utf8', flag: 'wx' });
@@ -148,6 +149,7 @@ async function readConfig(root: string): Promise<Config> {
   try {
     const config = JSON.parse(await readFile(configPath(root), 'utf8')) as Config;
     if (config.schemaVersion !== 1 || !config.targets || typeof config.targets !== 'object') throw new Error('Unsupported config format');
+    if (config.reminders !== undefined && typeof config.reminders !== 'boolean') throw new Error('config reminders must be true or false');
     return config;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { schemaVersion: 1, targets: {} };
@@ -160,8 +162,22 @@ export async function addTarget(root: string, id: string, repository: string): P
   const repo = normalizeRepo(repository);
   const config = await readConfig(root);
   config.targets[target] = { repo };
+  await writeConfig(root, config);
+}
+
+async function writeConfig(root: string, config: Config): Promise<void> {
   await mkdir(dataDir(root), { recursive: true });
   await writeReplace(configPath(root), `${JSON.stringify(config, null, 2)}\n`);
+}
+
+export async function getReminders(root: string): Promise<boolean | undefined> {
+  return (await readConfig(root)).reminders;
+}
+
+export async function setReminders(root: string, enabled: boolean): Promise<void> {
+  const config = await readConfig(root);
+  config.reminders = enabled;
+  await writeConfig(root, config);
 }
 
 export async function getTarget(root: string, id: string): Promise<{ repo: string } | undefined> {

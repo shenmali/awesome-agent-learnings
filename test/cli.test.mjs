@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, mkdir } from 'node:fs/promises';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdtemp, readFile, readdir, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -120,4 +120,37 @@ test('CLI warns about personal details and refuses secrets', async () => {
   assert.equal(refused.status, 1);
   assert.match(refused.stderr, /npm token/);
   assert.ok(!refused.stderr.includes(token));
+});
+
+test('CLI configures reminders and runs hooks without ever failing', async () => {
+  const cwd = await project();
+  assert.match(run(cwd, ['config', 'reminders']).stdout, /Reminders: off \(default\)/);
+  assert.equal(run(cwd, ['config', 'reminders', 'on']).status, 0);
+  assert.match(run(cwd, ['config', 'reminders']).stdout, /Reminders: on \(\.agent-learnings\/config\.json\)/);
+  assert.equal(run(cwd, ['config', 'reminders', 'maybe']).status, 1);
+  const state = await mkdtemp(join(tmpdir(), 'agent-learnings-state-'));
+  const hook = (event, payload) => spawnSync(process.execPath, [bin, 'hook', event], { cwd, input: payload, encoding: 'utf8', env: { ...env, AGENT_LEARNINGS_STATE_DIR: state } });
+  const used = hook('claude:PostToolUse', JSON.stringify({ session_id: 'cli', cwd, tool_name: 'Skill', tool_input: { skill: 'superpowers:writing-plans' } }));
+  assert.deepEqual([used.status, used.stdout], [0, '']);
+  const stop = hook('claude:Stop', JSON.stringify({ session_id: 'cli', cwd }));
+  assert.equal(stop.status, 0);
+  assert.match(JSON.parse(stop.stdout).systemMessage, /writing-plans/);
+  assert.equal(hook('claude:Stop', JSON.stringify({ session_id: 'cli', cwd })).stdout, '');
+  for (const [event, payload] of [['claude:Stop', 'garbage'], ['nope', '{}'], ['', '']]) {
+    const result = hook(event, payload);
+    assert.deepEqual([result.status, result.stdout], [0, ''], event);
+  }
+  run(cwd, ['config', 'reminders', 'off']);
+  assert.equal(hook('claude:PostToolUse', JSON.stringify({ session_id: 'quiet', cwd, tool_name: 'Skill', tool_input: { skill: 'x' } })).status, 0);
+  assert.equal((await readdir(state)).length, 1);
+});
+
+test('CLI hook exits on its own when stdin never closes', async () => {
+  const started = Date.now();
+  const result = await new Promise(resolve => {
+    const child = spawn(process.execPath, [bin, 'hook', 'claude:Stop'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    child.on('exit', code => resolve(code));
+  });
+  assert.equal(result, 0);
+  assert.ok(Date.now() - started < 5000);
 });
