@@ -1,0 +1,13 @@
+{
+  "name": "awesome-agent-learnings",
+  "description": "Marketplace for the agent-learnings feedback plugin.",
+  "owner": { "name": "shenmali", "url": "https://github.com/shenmali" },
+  "plugins": [
+    {
+      "name": "agent-learnings",
+      "source": "./plugins/agent-learnings",
+      "description": "Capture reviewed learnings about the AI components you use and share them with their maintainers.",
+      "category": "productivity"
+    }
+  ]
+}

@@ -3,18 +3,19 @@ import { readFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { parseArgs } from 'node:util';
-import { initSkills } from './install.js';
+import { initSkills, installPlatforms, type InstallPlatform } from './install.js';
 import { addLearning, addTarget, categories, editLearning, effectiveCategory, effectiveKind, getLearning, getReminders, kinds, learningFields, listLearnings, listTargets, removeLearning, setReminders, type Learning, type LearningInput } from './store.js';
 import { envReminders, runHook } from './reminders.js';
 import { describeFinding, scanFields } from './privacy.js';
 import { attachIssue, commentIssue, describeManifest, previewShare, publishIssue, refreshIssue, type SharePreview } from './github.js';
 import { findProjectRoot, packageVersion } from './project.js';
 
-const help = `Agent Learnings\n\nCommands:\n  init [--scope project|user]\n  target add <id> <github-owner/repo>\n  target list\n  learn add [--json <file|->]\n  learn edit <id> [--json <file|->]\n  learn remove <id> --yes\n  learn list\n  learn show <id>\n  share <id> [--publish|--comment <issue-url>|--attach <issue-url>|--status]\n  config reminders [on|off]\n  --version\n`;
+const help = `Agent Learnings\n\nCommands:\n  init [--scope project|user] [--platform all|claude|codex|opencode]\n  target add <id> <github-owner/repo>\n  target list\n  learn add [--json <file|->]\n  learn edit <id> [--json <file|->]\n  learn remove <id> --yes\n  learn list\n  learn show <id>\n  share <id> [--publish|--comment <issue-url>|--attach <issue-url>|--status]\n  config reminders [on|off]\n  --version\n`;
 
 const options = {
   json: { type: 'string' },
   scope: { type: 'string' },
+  platform: { type: 'string' },
   publish: { type: 'boolean' },
   status: { type: 'boolean' },
   attach: { type: 'string' },
@@ -148,10 +149,12 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()): P
   }
   const root = await findProjectRoot(cwd);
   if (command === 'init') {
-    expect(p, v, 1, ['scope'], 'init [--scope project|user]');
+    expect(p, v, 1, ['scope', 'platform'], 'init [--scope project|user] [--platform all|claude|codex|opencode]');
     const scope = v.scope ?? 'project';
     if (scope !== 'project' && scope !== 'user') throw new Error('scope must be project or user');
-    const created = await initSkills({ scope, cwd: root });
+    const platform = (v.platform ?? 'all') as InstallPlatform;
+    if (!installPlatforms.includes(platform)) throw new Error(`platform must be one of ${installPlatforms.join(', ')}`);
+    const created = await initSkills({ scope, cwd: root, platform });
     output.write(created.length ? `Installed:\n${created.join('\n')}\n` : 'Skills already exist; no files overwritten.\n');
     return;
   }

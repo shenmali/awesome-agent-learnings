@@ -1,0 +1,26 @@
+{
+  "description": "Opt-in feedback reminders. They stay silent unless enabled with `config reminders on` or AGENT_LEARNINGS_REMINDERS=1.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Skill|Agent|Task|mcp__.*",
+        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/cli.js\" hook claude:PostToolUse", "async": true, "timeout": 10 }]
+      }
+    ],
+    "UserPromptExpansion": [
+      {
+        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/cli.js\" hook claude:UserPromptExpansion", "async": true, "timeout": 10 }]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/cli.js\" hook claude:Stop", "timeout": 10 }]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/cli.js\" hook claude:SessionEnd", "timeout": 5 }]
+      }
+    ]
+  }
+}

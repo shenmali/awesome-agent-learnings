@@ -1,0 +1,11 @@
+{
+  "name": "agent-learnings",
+  "displayName": "Agent Learnings",
+  "version": "0.2.0",
+  "description": "A common feedback mechanism for the skills, agents, hooks, commands and MCP servers you use: capture reviewed learnings and share them with their maintainers as GitHub issues.",
+  "author": { "name": "shenmali", "url": "https://github.com/shenmali" },
+  "homepage": "https://github.com/shenmali/awesome-agent-learnings#readme",
+  "repository": "https://github.com/shenmali/awesome-agent-learnings",
+  "license": "MIT",
+  "keywords": ["feedback", "learnings", "skills", "agents", "hooks", "mcp", "github-issues"]
+}

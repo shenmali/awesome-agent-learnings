@@ -3,35 +3,54 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { initSkills } from '../dist/install.js';
-import { addTarget, getTarget, addLearning, listLearnings, getLearning, updateLearning, editLearning, removeLearning, withLearningLock, effectiveKind, effectiveCategory } from '../dist/store.js';
-import { refreshIssue } from '../dist/github.js';
+import { initSkills } from '../plugins/agent-learnings/dist/install.js';
+import { addTarget, getTarget, addLearning, listLearnings, getLearning, updateLearning, editLearning, removeLearning, withLearningLock, effectiveKind, effectiveCategory } from '../plugins/agent-learnings/dist/store.js';
+import { refreshIssue } from '../plugins/agent-learnings/dist/github.js';
 
 const project = () => mkdtemp(join(tmpdir(), 'agent-learnings-'));
 const draft = { target: 'superpowers', platform: 'codex', situation: 'Plans missed review gates', change: 'Add a final review step', result: 'Review caught a missing test', version: '7.0.1' };
 
-test('project install creates Codex/OpenCode and Claude skills without overwriting edits', async () => {
+const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+const skills = ['capture-learning', 'share-learning', 'manage-learnings'];
+
+test('project install creates Codex, OpenCode and Claude skills without overwriting edits', async () => {
   const root = await project();
   const paths = await initSkills({ scope: 'project', cwd: root });
-  assert.equal(paths.length, 2);
-  const codex = join(root, '.agents/skills/agent-learnings/SKILL.md');
-  const claude = join(root, '.claude/skills/agent-learnings/SKILL.md');
-  assert.match(await readFile(codex, 'utf8'), /learn add/);
-  assert.match(await readFile(codex, 'utf8'), /npx --yes agent-learnings@0\.1\.0/);
-  assert.match(await readFile(claude, 'utf8'), /disable-model-invocation: true/);
+  assert.equal(paths.length, 12);
+  const codex = join(root, '.agents/skills/capture-learning/SKILL.md');
+  const claude = join(root, '.claude/skills/capture-learning/SKILL.md');
+  assert.match(await readFile(codex, 'utf8'), /learn add --json/);
+  assert.match(await readFile(codex, 'utf8'), new RegExp(`npx --yes agent-learnings@${version.replaceAll('.', '\\.')} learn add`));
+  assert.match(await readFile(codex, 'utf8'), /disable-model-invocation: true/);
+  assert.doesNotMatch(await readFile(codex, 'utf8'), /allowed-tools|opencode\//);
+  assert.match(await readFile(join(root, '.agents/skills/capture-learning/agents/openai.yaml'), 'utf8'), /allow_implicit_invocation: false/);
+  assert.match(await readFile(claude, 'utf8'), /allowed-tools: Bash\(npx --yes agent-learnings@[\d.]+ learn \*\)/);
+  assert.match(await readFile(join(root, '.opencode/commands/share-learning.md'), 'utf8'), /share <id> --publish[\s\S]*\$ARGUMENTS/);
+  for (const name of skills) assert.match(await readFile(join(root, '.claude/skills', name, 'SKILL.md'), 'utf8'), new RegExp(`name: ${name}`));
   await writeFile(codex, 'personal edit');
   const second = await initSkills({ scope: 'project', cwd: root });
   assert.deepEqual(second, []);
   assert.equal(await readFile(codex, 'utf8'), 'personal edit');
 });
 
+test('install can target one platform', async () => {
+  const root = await project();
+  const opencode = (await initSkills({ scope: 'project', cwd: root, platform: 'opencode' })).map(path => path.slice(root.length + 1).replaceAll('\\', '/'));
+  assert.ok(opencode.every(path => path.startsWith('.agents/skills/') || path.startsWith('.opencode/commands/')));
+  assert.equal(opencode.length, 9);
+  const claudeOnly = await project();
+  assert.ok((await initSkills({ scope: 'project', cwd: claudeOnly, platform: 'claude' })).every(path => path.includes(join('.claude', 'skills'))));
+});
+
 test('user install uses the home directory and keeps project learning files separate', async () => {
   const root = await project();
   const home = await project();
   await initSkills({ scope: 'user', cwd: root, home });
-  assert.match(await readFile(join(home, '.agents/skills/agent-learnings/SKILL.md'), 'utf8'), /learn add/);
-  assert.doesNotMatch(await readFile(join(home, '.agents/skills/agent-learnings/SKILL.md'), 'utf8'), /npx --yes/);
-  assert.match(await readFile(join(home, '.claude/skills/agent-learnings/SKILL.md'), 'utf8'), /learn add/);
+  const skill = await readFile(join(home, '.agents/skills/capture-learning/SKILL.md'), 'utf8');
+  assert.match(skill, /`agent-learnings learn add --json/);
+  assert.doesNotMatch(skill, /npx --yes/);
+  assert.match(await readFile(join(home, '.claude/skills/capture-learning/SKILL.md'), 'utf8'), /learn add/);
+  assert.match(await readFile(join(home, '.config/opencode/commands/capture-learning.md'), 'utf8'), /learn add/);
   await assert.rejects(readFile(join(root, '.agent-learnings/config.json'), 'utf8'));
 });
 

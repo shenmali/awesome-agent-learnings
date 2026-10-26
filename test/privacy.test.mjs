@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertNoSecrets, describeFinding, redact, scanSensitive } from '../dist/privacy.js';
+import { assertNoSecrets, describeFinding, redact, scanSensitive } from '../plugins/agent-learnings/dist/privacy.js';
 
 // Fake secrets are assembled at runtime so that secret scanners do not flag this file.
 const fake = {

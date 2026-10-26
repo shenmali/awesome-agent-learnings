@@ -1,0 +1,5 @@
+interface:
+  display_name: "Manage learnings"
+  short_description: "List, edit or remove saved learnings"
+policy:
+  allow_implicit_invocation: false

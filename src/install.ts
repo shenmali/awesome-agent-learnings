@@ -1,30 +1,36 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { packageVersion } from './project.js';
+import { renderOpenaiYaml, renderOpencodeCommand, renderSkill, skillNames } from './skills.js';
 
-export interface InstallOptions { scope: 'project' | 'user'; cwd: string; home?: string }
-
-function workflow(command: string): string {
-  return `# Agent Learnings\n\nRun only when the user explicitly asks to capture a learning.\n\n1. Identify the plugin or skill, the situation, the prompt or skill change, and the observed result from the current work. Do not copy the full conversation.\n2. Present the draft in chat. Ask the user to edit or approve it. Do not run the saving command before explicit approval.\n3. After approval, run \`${command} learn add --json <draft-file>\` with JSON fields target, platform, situation, change, result, and optional version, kind (skill, agent, hook, command, mcp, plugin, prompt or other), component (the specific skill, agent or hook name) and category (improvement, bug, regression or praise). Use the current platform name. The CLI rejects drafts that contain tokens or other secrets. The draft file may be temporary. Do not put sensitive content in a shell command argument.\n4. Report the saved learning ID. If the user asks to contribute it, run \`${command} share <id>\` for a preview. Show the complete issue text and ask for explicit approval before \`${command} share <id> --publish\`.\n5. Never publish a learning merely because it was saved.\n`;
-}
-
-function skill(claude: boolean, command: string): string {
-  return `---\nname: agent-learnings\ndescription: Capture reviewed learnings from improvements to shared agent skills and plugins\n${claude ? 'disable-model-invocation: true\n' : 'metadata:\n  opencode/slash: "true"\n  opencode/autoinvoke: "false"\n'}---\n\n${workflow(command)}`;
-}
+export const installPlatforms = ['all', 'claude', 'codex', 'opencode'] as const;
+export type InstallPlatform = typeof installPlatforms[number];
+export interface InstallOptions { scope: 'project' | 'user'; cwd: string; home?: string; platform?: InstallPlatform }
 
 export async function initSkills(options: InstallOptions): Promise<string[]> {
-  const base = options.scope === 'user' ? (options.home ?? homedir()) : options.cwd;
+  const platform = options.platform ?? 'all';
+  const home = options.home ?? homedir();
+  const base = options.scope === 'user' ? home : options.cwd;
   const command = options.scope === 'project' ? `npx --yes agent-learnings@${await packageVersion()}` : 'agent-learnings';
-  const targets: Array<[string, boolean]> = [
-    [join(base, '.agents', 'skills', 'agent-learnings', 'SKILL.md'), false],
-    [join(base, '.claude', 'skills', 'agent-learnings', 'SKILL.md'), true],
-  ];
+  const files: Array<[string, string]> = [];
+  for (const name of skillNames) {
+    if (platform !== 'claude') {
+      // .agents/skills is read by both Codex and OpenCode.
+      files.push([join(base, '.agents', 'skills', name, 'SKILL.md'), renderSkill(name, command, 'agents')]);
+      files.push([join(base, '.agents', 'skills', name, 'agents', 'openai.yaml'), renderOpenaiYaml(name)]);
+    }
+    if (platform === 'all' || platform === 'opencode') {
+      const commands = options.scope === 'user' ? join(home, '.config', 'opencode', 'commands') : join(base, '.opencode', 'commands');
+      files.push([join(commands, `${name}.md`), renderOpencodeCommand(name, command)]);
+    }
+    if (platform === 'all' || platform === 'claude') files.push([join(base, '.claude', 'skills', name, 'SKILL.md'), renderSkill(name, command, 'claude')]);
+  }
   const created: string[] = [];
-  for (const [path, claude] of targets) {
-    await mkdir(join(path, '..'), { recursive: true });
+  for (const [path, content] of files) {
+    await mkdir(dirname(path), { recursive: true });
     try {
-      await writeFile(path, skill(claude, command), { encoding: 'utf8', flag: 'wx' });
+      await writeFile(path, content, { encoding: 'utf8', flag: 'wx' });
       created.push(path);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;

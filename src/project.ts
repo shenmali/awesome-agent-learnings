@@ -15,6 +15,7 @@ export async function findProjectRoot(cwd: string): Promise<string> {
   }
 }
 
+// The plugin manifest ships with both the plugin and the npm package; a test keeps it in sync with package.json.
 export async function packageVersion(): Promise<string> {
-  return (JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
+  return (JSON.parse(await readFile(new URL('../.claude-plugin/plugin.json', import.meta.url), 'utf8')) as { version: string }).version;
 }

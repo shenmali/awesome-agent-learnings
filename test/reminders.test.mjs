@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readdir, readFile, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { adaptHook, cleanupState, remindersEnabled, runHook } from '../dist/reminders.js';
-import { getReminders, setReminders, addTarget, listTargets } from '../dist/store.js';
+import { adaptHook, cleanupState, remindersEnabled, runHook } from '../plugins/agent-learnings/dist/reminders.js';
+import { getReminders, setReminders, addTarget, listTargets } from '../plugins/agent-learnings/dist/store.js';
 
 const temp = () => mkdtemp(join(tmpdir(), 'agent-learnings-hook-'));
 const on = { AGENT_LEARNINGS_REMINDERS: '1' };

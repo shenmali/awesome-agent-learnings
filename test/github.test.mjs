@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { addLearning, addTarget, getLearning } from '../dist/store.js';
-import { prepareIssue, publishIssue, refreshIssue, attachIssue, commentIssue, fetchManifest, previewShare, relatedQuery, issueTitle } from '../dist/github.js';
-import { defaultManifest } from '../dist/manifest.js';
+import { addLearning, addTarget, getLearning } from '../plugins/agent-learnings/dist/store.js';
+import { prepareIssue, publishIssue, refreshIssue, attachIssue, commentIssue, fetchManifest, previewShare, relatedQuery, issueTitle } from '../plugins/agent-learnings/dist/github.js';
+import { defaultManifest } from '../plugins/agent-learnings/dist/manifest.js';
 
 const project = () => mkdtemp(join(tmpdir(), 'agent-learnings-share-'));
 const draft = { target: 'superpowers', platform: 'claude', situation: 'Repeated context loss', change: 'Add an explicit recap', result: 'The next task kept the constraints' };

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const project = () => mkdtemp(join(tmpdir(), 'agent-learnings-cli-'));
-const bin = new URL('../dist/cli.js', import.meta.url).pathname.replace(/^\/(?=[A-Za-z]:)/, '');
+const bin = new URL('../plugins/agent-learnings/dist/cli.js', import.meta.url).pathname.replace(/^\/(?=[A-Za-z]:)/, '');
 // A missing gh binary keeps CLI tests offline and deterministic.
 const env = { ...process.env, AGENT_LEARNINGS_GH: join(tmpdir(), 'agent-learnings-no-gh') };
 const run = (cwd, args, input) => spawnSync(process.execPath, [bin, ...args], { cwd, input, encoding: 'utf8', env });

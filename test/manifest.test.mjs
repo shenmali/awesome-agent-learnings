@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultManifest, parseManifest, policyFor } from '../dist/manifest.js';
+import { defaultManifest, parseManifest, policyFor } from '../plugins/agent-learnings/dist/manifest.js';
 
 test('maintainer manifest accepts the documented fields and ignores unknown ones', () => {
   const manifest = parseManifest('﻿{"schemaVersion":1,"accepting":true,"kinds":["skill","workflow"],"categories":["bug"],"titlePrefix":" [learning] ","feedbackUrl":"https://example.com/f","labels":["x"]}');
