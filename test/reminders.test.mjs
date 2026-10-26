@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readdir, readFile, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { adaptHook, cleanupState, remindersEnabled, runHook } from '../plugins/agent-learnings/dist/reminders.js';
-import { getReminders, setReminders, addTarget, listTargets } from '../plugins/agent-learnings/dist/store.js';
+import { adaptHook, cleanupState, effectiveMode, remindersEnabled, runHook } from '../plugins/agent-learnings/dist/reminders.js';
+import { getReminders, setReminders, setMode, addTarget, listTargets } from '../plugins/agent-learnings/dist/store.js';
 
 const temp = () => mkdtemp(join(tmpdir(), 'agent-learnings-hook-'));
 const on = { AGENT_LEARNINGS_REMINDERS: '1' };
@@ -83,4 +83,37 @@ test('old state files are cleaned up and unsafe state directories are ignored', 
     await runHook('claude:PostToolUse', use('Skill', { skill: 'x' }), { env: on, stateDir: link });
     assert.deepEqual(await readdir(real), []);
   }
+});
+
+test('auto mode asks the agent once per session to save learnings without approval', async () => {
+  const dir = await temp();
+  const env = { AGENT_LEARNINGS_MODE: 'auto', CLAUDE_PLUGIN_ROOT: '/opt/plugin' };
+  const options = { env, stateDir: dir };
+  assert.equal(await runHook('claude:Stop', '{"session_id":"s1"}', options), '');
+  await runHook('claude:PostToolUse', use('Skill', { skill: 'superpowers:brainstorming' }), options);
+  assert.equal(await runHook('claude:Stop', '{"session_id":"s1","stop_hook_active":true}', options), '');
+  const first = JSON.parse(await runHook('claude:Stop', '{"session_id":"s1","stop_hook_active":false}', options));
+  assert.equal(first.decision, 'block');
+  assert.match(first.reason, /skill:superpowers:brainstorming/);
+  assert.match(first.reason, /node "\/opt\/plugin[\\/]dist[\\/]cli\.js" learn add --json <file> --auto/);
+  assert.match(first.reason, /Never publish/);
+  assert.match(first.systemMessage, /auto mode/);
+  assert.equal(await runHook('claude:Stop', '{"session_id":"s1"}', options), '');
+});
+
+test('auto mode follows env over project config and works with reminders off', async () => {
+  assert.equal(effectiveMode({}, undefined), 'manual');
+  assert.equal(effectiveMode({}, 'auto'), 'auto');
+  assert.equal(effectiveMode({ AGENT_LEARNINGS_MODE: 'manual' }, 'auto'), 'manual');
+  assert.equal(effectiveMode({ AGENT_LEARNINGS_MODE: 'bogus' }, 'auto'), 'auto');
+  const root = await temp();
+  await setMode(root, 'auto');
+  const dir = await temp();
+  const payload = JSON.stringify({ session_id: 'p', cwd: root, tool_name: 'Skill', tool_input: { skill: 'x' } });
+  await runHook('claude:PostToolUse', payload, { env: { AGENT_LEARNINGS_MODE: 'manual' }, stateDir: dir });
+  assert.deepEqual(await readdir(dir), []);
+  await runHook('claude:PostToolUse', payload, { env: {}, stateDir: dir });
+  const stop = JSON.parse(await runHook('claude:Stop', JSON.stringify({ session_id: 'p', cwd: root }), { env: {}, stateDir: dir }));
+  assert.equal(stop.decision, 'block');
+  assert.match(stop.reason, /`agent-learnings learn add --json <file> --auto`/);
 });

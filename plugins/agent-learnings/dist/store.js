@@ -5,6 +5,7 @@ import { assertNoSecrets } from './privacy.js';
 export const platforms = ['codex', 'claude', 'opencode'];
 export const kinds = ['skill', 'agent', 'hook', 'command', 'mcp', 'plugin', 'prompt', 'other'];
 export const categories = ['improvement', 'bug', 'regression', 'praise'];
+export const modes = ['manual', 'auto'];
 const inputKeys = ['target', 'platform', 'version', 'kind', 'component', 'category', 'situation', 'change', 'result'];
 const dataDir = (root) => join(root, '.agent-learnings');
 const learningDir = (root) => join(dataDir(root), 'learnings');
@@ -131,6 +132,8 @@ async function readConfig(root) {
             throw new Error('Unsupported config format');
         if (config.reminders !== undefined && typeof config.reminders !== 'boolean')
             throw new Error('config reminders must be true or false');
+        if (config.mode !== undefined && !modes.includes(config.mode))
+            throw new Error(`config mode must be ${modes.join(' or ')}`);
         return config;
     }
     catch (error) {
@@ -158,6 +161,14 @@ export async function setReminders(root, enabled) {
     config.reminders = enabled;
     await writeConfig(root, config);
 }
+export async function getMode(root) {
+    return (await readConfig(root)).mode;
+}
+export async function setMode(root, mode) {
+    const config = await readConfig(root);
+    config.mode = mode;
+    await writeConfig(root, config);
+}
 export async function getTarget(root, id) {
     const targets = (await readConfig(root)).targets;
     const target = requireTarget(id);
@@ -176,7 +187,7 @@ function renderBody(item) {
 }
 function renderLearning(item) {
     const content = { situation: item.situation, change: item.change, result: item.result };
-    return `---\n${field('id', item.id)}${field('target', item.target)}${field('platform', item.platform)}${field('version', item.version)}${field('kind', item.kind)}${field('component', item.component)}${field('category', item.category)}${field('createdAt', item.createdAt)}${field('issueUrl', item.issueUrl)}${field('commentUrl', item.commentUrl)}${field('issueStatus', item.issueStatus)}${field('content', content)}---\n\n${renderBody(item)}`;
+    return `---\n${field('id', item.id)}${field('target', item.target)}${field('platform', item.platform)}${field('version', item.version)}${field('kind', item.kind)}${field('component', item.component)}${field('category', item.category)}${field('createdAt', item.createdAt)}${field('origin', item.origin)}${field('issueUrl', item.issueUrl)}${field('commentUrl', item.commentUrl)}${field('issueStatus', item.issueStatus)}${field('content', content)}---\n\n${renderBody(item)}`;
 }
 function parseLearning(markdown) {
     markdown = markdown.replace(/\r\n/g, '\n');
@@ -202,6 +213,7 @@ function parseLearning(markdown) {
         component: typeof meta.component === 'string' ? meta.component : undefined,
         category: storedEnum(meta.category, categories, 'category'),
         createdAt: requireText(meta.createdAt, 'createdAt'),
+        origin: meta.origin === 'auto' ? 'auto' : undefined,
         issueUrl: typeof meta.issueUrl === 'string' ? meta.issueUrl : undefined,
         commentUrl: typeof meta.commentUrl === 'string' ? meta.commentUrl : undefined,
         issueStatus: meta.issueStatus === 'OPEN' || meta.issueStatus === 'CLOSED' ? meta.issueStatus : undefined,
@@ -214,13 +226,14 @@ function parseLearning(markdown) {
     }
     return item;
 }
-export async function addLearning(root, input) {
+export async function addLearning(root, input, options = {}) {
     const draft = normalizeInput(input);
     assertNoSecrets(learningFields(draft), 'save this learning');
     const item = {
         ...draft,
         id: `${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${randomBytes(4).toString('hex')}`,
         createdAt: new Date().toISOString(),
+        origin: options.auto ? 'auto' : undefined,
     };
     await mkdir(learningDir(root), { recursive: true });
     await writeFile(learningPath(root, item.id), renderLearning(item), { encoding: 'utf8', flag: 'wx' });

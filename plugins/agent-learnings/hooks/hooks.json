@@ -1,5 +1,5 @@
 {
-  "description": "Opt-in feedback reminders. They stay silent unless enabled with `config reminders on` or AGENT_LEARNINGS_REMINDERS=1.",
+  "description": "Opt-in feedback reminders and auto mode. They stay silent unless enabled with `config reminders on`, `config mode auto`, AGENT_LEARNINGS_REMINDERS=1 or AGENT_LEARNINGS_MODE=auto.",
   "hooks": {
     "PostToolUse": [
       {

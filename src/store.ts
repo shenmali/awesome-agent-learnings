@@ -10,6 +10,8 @@ export type Kind = typeof kinds[number];
 export const categories = ['improvement', 'bug', 'regression', 'praise'] as const;
 export type Category = typeof categories[number];
 export type IssueStatus = 'OPEN' | 'CLOSED';
+export const modes = ['manual', 'auto'] as const;
+export type Mode = typeof modes[number];
 
 export interface LearningInput {
   target: string;
@@ -26,6 +28,8 @@ export interface LearningInput {
 export interface Learning extends LearningInput {
   id: string;
   createdAt: string;
+  // 'auto' when an agent saved the learning without asking, in auto mode. Shown in reviews, never published.
+  origin?: 'auto';
   issueUrl?: string;
   commentUrl?: string;
   issueStatus?: IssueStatus;
@@ -35,6 +39,7 @@ interface Config {
   schemaVersion: 1;
   targets: Record<string, { repo: string }>;
   reminders?: boolean;
+  mode?: Mode;
 }
 
 const inputKeys = ['target', 'platform', 'version', 'kind', 'component', 'category', 'situation', 'change', 'result'];
@@ -150,6 +155,7 @@ async function readConfig(root: string): Promise<Config> {
     const config = JSON.parse(await readFile(configPath(root), 'utf8')) as Config;
     if (config.schemaVersion !== 1 || !config.targets || typeof config.targets !== 'object') throw new Error('Unsupported config format');
     if (config.reminders !== undefined && typeof config.reminders !== 'boolean') throw new Error('config reminders must be true or false');
+    if (config.mode !== undefined && !modes.includes(config.mode)) throw new Error(`config mode must be ${modes.join(' or ')}`);
     return config;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { schemaVersion: 1, targets: {} };
@@ -180,6 +186,16 @@ export async function setReminders(root: string, enabled: boolean): Promise<void
   await writeConfig(root, config);
 }
 
+export async function getMode(root: string): Promise<Mode | undefined> {
+  return (await readConfig(root)).mode;
+}
+
+export async function setMode(root: string, mode: Mode): Promise<void> {
+  const config = await readConfig(root);
+  config.mode = mode;
+  await writeConfig(root, config);
+}
+
 export async function getTarget(root: string, id: string): Promise<{ repo: string } | undefined> {
   const targets = (await readConfig(root)).targets;
   const target = requireTarget(id);
@@ -202,7 +218,7 @@ function renderBody(item: Learning): string {
 
 function renderLearning(item: Learning): string {
   const content = { situation: item.situation, change: item.change, result: item.result };
-  return `---\n${field('id', item.id)}${field('target', item.target)}${field('platform', item.platform)}${field('version', item.version)}${field('kind', item.kind)}${field('component', item.component)}${field('category', item.category)}${field('createdAt', item.createdAt)}${field('issueUrl', item.issueUrl)}${field('commentUrl', item.commentUrl)}${field('issueStatus', item.issueStatus)}${field('content', content)}---\n\n${renderBody(item)}`;
+  return `---\n${field('id', item.id)}${field('target', item.target)}${field('platform', item.platform)}${field('version', item.version)}${field('kind', item.kind)}${field('component', item.component)}${field('category', item.category)}${field('createdAt', item.createdAt)}${field('origin', item.origin)}${field('issueUrl', item.issueUrl)}${field('commentUrl', item.commentUrl)}${field('issueStatus', item.issueStatus)}${field('content', content)}---\n\n${renderBody(item)}`;
 }
 
 function parseLearning(markdown: string): Learning {
@@ -226,6 +242,7 @@ function parseLearning(markdown: string): Learning {
     component: typeof meta.component === 'string' ? meta.component : undefined,
     category: storedEnum(meta.category, categories, 'category'),
     createdAt: requireText(meta.createdAt, 'createdAt'),
+    origin: meta.origin === 'auto' ? 'auto' : undefined,
     issueUrl: typeof meta.issueUrl === 'string' ? meta.issueUrl : undefined,
     commentUrl: typeof meta.commentUrl === 'string' ? meta.commentUrl : undefined,
     issueStatus: meta.issueStatus === 'OPEN' || meta.issueStatus === 'CLOSED' ? meta.issueStatus : undefined,
@@ -239,13 +256,14 @@ function parseLearning(markdown: string): Learning {
   return item;
 }
 
-export async function addLearning(root: string, input: unknown): Promise<Learning> {
+export async function addLearning(root: string, input: unknown, options: { auto?: boolean } = {}): Promise<Learning> {
   const draft = normalizeInput(input);
   assertNoSecrets(learningFields(draft), 'save this learning');
   const item: Learning = {
     ...draft,
     id: `${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${randomBytes(4).toString('hex')}`,
     createdAt: new Date().toISOString(),
+    origin: options.auto ? 'auto' : undefined,
   };
   await mkdir(learningDir(root), { recursive: true });
   await writeFile(learningPath(root, item.id), renderLearning(item), { encoding: 'utf8', flag: 'wx' });

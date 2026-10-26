@@ -154,3 +154,30 @@ test('CLI hook exits on its own when stdin never closes', async () => {
   assert.equal(result, 0);
   assert.ok(Date.now() - started < 5000);
 });
+
+test('CLI auto mode: config, auto-saved learnings, pending review and batch publish', async () => {
+  const cwd = await project();
+  assert.match(run(cwd, ['config', 'mode']).stdout, /Mode: manual \(default\)/);
+  assert.match(run(cwd, ['config', 'mode', 'auto']).stdout, /publishing still needs approval/);
+  assert.match(run(cwd, ['config', 'mode']).stdout, /Mode: auto \(\.agent-learnings\/config\.json\)/);
+  assert.equal(run(cwd, ['config', 'mode', 'yolo']).status, 1);
+  assert.equal(run(cwd, ['learn', 'add', '--auto']).status, 1);
+  run(cwd, ['target', 'add', 'superpowers', 'obra/superpowers']);
+  const draft = situation => JSON.stringify({ target: 'superpowers', platform: 'claude', situation, change: 'y', result: 'z' });
+  const ids = ['First auto', 'Second auto'].map(text => run(cwd, ['learn', 'add', '--json', '-', '--auto'], draft(text)).stdout.match(/\d{8}-[a-f0-9]{8}/)?.[0]);
+  const manual = run(cwd, ['learn', 'add', '--json', '-'], draft('Manual one')).stdout.match(/\d{8}-[a-f0-9]{8}/)?.[0];
+  assert.ok(ids.every(Boolean) && manual);
+  assert.match(run(cwd, ['learn', 'show', ids[0]]).stdout, /Origin: auto/);
+  assert.match(run(cwd, ['learn', 'list']).stdout, new RegExp(`${ids[0]}\\t.*\\tauto\\n`));
+  const pending = run(cwd, ['share', '--pending']);
+  assert.equal(pending.status, 0, pending.stderr);
+  assert.match(pending.stdout, /First auto[\s\S]*Second auto/);
+  assert.doesNotMatch(pending.stdout, /Manual one/);
+  assert.equal(pending.stdout.match(/--publish/g).length, 1);
+  assert.match(pending.stdout, new RegExp(`share ${ids[0]} ${ids[1]} --publish`));
+  const batch = run(cwd, ['share', ids[0], '20991231-deadbeef', ids[1], '--publish']);
+  assert.equal(batch.status, 1);
+  assert.match(batch.stdout, new RegExp(`${ids[0]}: GitHub CLI is unavailable[\\s\\S]*${ids[1]}: GitHub CLI is unavailable`));
+  assert.match(batch.stderr, /20991231-deadbeef: Learning 20991231-deadbeef not found/);
+  assert.equal(run(cwd, ['share', ids[0], ids[1], '--status']).status, 1);
+});

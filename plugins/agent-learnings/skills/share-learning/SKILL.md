@@ -1,6 +1,6 @@
 ---
 name: share-learning
-description: "Preview a saved agent learning as a GitHub issue for the component maintainers, check maintainer settings, privacy findings and related issues, and publish or comment only after explicit approval."
+description: "Preview saved agent learnings (including those saved automatically in auto mode) as GitHub issues for the component maintainers, check maintainer settings, privacy findings and related issues, and publish or comment only after explicit approval."
 disable-model-invocation: true
 ---
 
@@ -17,3 +17,9 @@ Run only when the user asks to share a saved learning.
 5. Only after the user explicitly approves that exact text and destination, run `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" share <id> --publish` or `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" share <id> --comment <issue-url>`.
 6. If the CLI says the GitHub CLI or its authentication is unavailable, it prints text for manual submission. Give it to the user; after they post it, run `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" share <id> --attach <issue-url>`.
 7. Report the resulting URL. `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" share <id> --status` later refreshes whether the issue is open or closed.
+
+Learnings saved automatically in auto mode wait for a combined review:
+
+1. Run `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" share --pending`. It prints the preview of every unshared auto-saved learning and one publish command.
+2. Show all previews and ask the user which to publish: all, some or none. Offer `--comment` for any that match an existing issue, and editing or removing the others with the manage-learnings skill.
+3. After that single approval, publish the approved ids together: `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" share <id> <id> ... --publish`. Report each URL and any id that failed.

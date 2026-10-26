@@ -3,7 +3,8 @@ import { lstat, mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findProjectRoot } from './project.js';
-import { getReminders, writeReplace } from './store.js';
+import { autoCaptureInstructions } from './skills.js';
+import { getMode, getReminders, modes, writeReplace } from './store.js';
 export const claudeEvents = ['PostToolUse', 'UserPromptExpansion', 'Stop', 'SessionEnd'];
 const maxComponents = 20;
 const dayMs = 24 * 60 * 60 * 1000;
@@ -37,7 +38,7 @@ function claude(event, payload) {
         return { ...base, action: 'use', components: component('command', payload.command_name) };
     }
     if (event === 'Stop')
-        return { ...base, action: 'stop', components: [] };
+        return { ...base, action: 'stop', components: [], continued: payload.stop_hook_active === true };
     if (event === 'SessionEnd')
         return { ...base, action: 'end', components: [] };
     return undefined;
@@ -71,6 +72,13 @@ export function envReminders(env) {
 }
 export function remindersEnabled(env, configured) {
     return envReminders(env) ?? configured ?? false;
+}
+export function envMode(env) {
+    const value = env.AGENT_LEARNINGS_MODE?.trim().toLowerCase();
+    return modes.includes(value) ? value : undefined;
+}
+export function effectiveMode(env, configured) {
+    return envMode(env) ?? configured ?? 'manual';
 }
 export function stateDir(env) {
     if (env.AGENT_LEARNINGS_STATE_DIR)
@@ -114,7 +122,8 @@ function message(components, format) {
     const command = format === 'claude' ? '/agent-learnings:capture-learning' : 'the capture-learning skill';
     return `agent-learnings: this session used ${names}. If something worked well or could be better, run ${command} to record it.`;
 }
-export async function takeReminder(event, dir, now = Date.now()) {
+// Returns the session's components the first time it is called for a session that used any, then nothing.
+export async function claimReminder(event, dir, now = Date.now()) {
     if (!(await ensureDir(dir)))
         return undefined;
     const path = statePath(dir, event.sessionId);
@@ -123,7 +132,7 @@ export async function takeReminder(event, dir, now = Date.now()) {
     if (state.reminded || !state.components.length)
         return undefined;
     await writeReplace(path, JSON.stringify({ ...state, reminded: true }));
-    return message(state.components, event.format);
+    return state.components;
 }
 export async function cleanupState(dir, now = Date.now(), maxAgeMs = dayMs) {
     let removed = 0;
@@ -147,18 +156,21 @@ export async function cleanupState(dir, now = Date.now(), maxAgeMs = dayMs) {
     }
     return removed;
 }
-async function enabled(env, cwd) {
-    const fromEnv = envReminders(env);
-    if (fromEnv !== undefined)
-        return fromEnv;
-    if (!cwd)
-        return false;
+async function settings(env, cwd) {
+    const fromEnv = { reminders: envReminders(env), mode: envMode(env) };
+    if ((fromEnv.reminders !== undefined && fromEnv.mode !== undefined) || !cwd) {
+        return { reminders: fromEnv.reminders ?? false, mode: fromEnv.mode ?? 'manual' };
+    }
     try {
-        return remindersEnabled(env, await getReminders(await findProjectRoot(cwd)));
+        const root = await findProjectRoot(cwd);
+        return { reminders: remindersEnabled(env, await getReminders(root)), mode: effectiveMode(env, await getMode(root)) };
     }
     catch {
-        return false;
+        return { reminders: fromEnv.reminders ?? false, mode: fromEnv.mode ?? 'manual' };
     }
+}
+function autoCommand(env) {
+    return env.CLAUDE_PLUGIN_ROOT ? `node "${join(env.CLAUDE_PLUGIN_ROOT, 'dist', 'cli.js')}"` : 'agent-learnings';
 }
 // Hook entry point. It never throws and returns '' when there is nothing to print, so it cannot break the host agent.
 export async function runHook(spec, raw, options = {}) {
@@ -180,15 +192,26 @@ export async function runHook(spec, raw, options = {}) {
             await cleanupState(dir, options.now);
             return '';
         }
-        if (!(await enabled(env, event.cwd)))
+        const { reminders, mode } = await settings(env, event.cwd);
+        if (!reminders && mode !== 'auto')
             return '';
         if (event.action === 'use') {
             await recordUse(event, dir);
             return '';
         }
-        const text = await takeReminder(event, dir, options.now);
-        if (!text)
+        // Never ask twice in a row: the agent is already working on a previous Stop hook request.
+        if (mode === 'auto' && event.continued)
             return '';
+        const components = await claimReminder(event, dir, options.now);
+        if (!components)
+            return '';
+        if (mode === 'auto') {
+            const reason = autoCaptureInstructions(autoCommand(env), components);
+            return event.format === 'claude'
+                ? JSON.stringify({ decision: 'block', reason, systemMessage: 'agent-learnings auto mode: checking this session for learnings worth saving' })
+                : reason;
+        }
+        const text = message(components, event.format);
         return event.format === 'claude' ? JSON.stringify({ systemMessage: text }) : text;
     }
     catch (error) {

@@ -6,3 +6,4 @@ export declare function renderSkill(name: SkillName, command: string, flavor: Sk
 export declare function renderOpenaiYaml(name: SkillName): string;
 export declare function renderOpencodeCommand(name: SkillName, command: string): string;
 export declare function pluginFiles(): Record<string, string>;
+export declare function autoCaptureInstructions(command: string, components: string[]): string;

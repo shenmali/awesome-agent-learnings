@@ -4,12 +4,12 @@ import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { parseArgs } from 'node:util';
 import { initSkills, installPlatforms } from './install.js';
-import { addLearning, addTarget, categories, editLearning, effectiveCategory, effectiveKind, getLearning, getReminders, kinds, learningFields, listLearnings, listTargets, removeLearning, setReminders } from './store.js';
-import { envReminders, runHook } from './reminders.js';
+import { addLearning, addTarget, categories, editLearning, effectiveCategory, effectiveKind, getLearning, getMode, getReminders, kinds, learningFields, listLearnings, listTargets, removeLearning, setMode, setReminders, modes } from './store.js';
+import { envMode, envReminders, runHook } from './reminders.js';
 import { describeFinding, scanFields } from './privacy.js';
 import { attachIssue, commentIssue, describeManifest, previewShare, publishIssue, refreshIssue } from './github.js';
 import { findProjectRoot, packageVersion } from './project.js';
-const help = `Agent Learnings\n\nCommands:\n  init [--scope project|user] [--platform all|claude|codex|opencode]\n  target add <id> <github-owner/repo>\n  target list\n  learn add [--json <file|->]\n  learn edit <id> [--json <file|->]\n  learn remove <id> --yes\n  learn list\n  learn show <id>\n  share <id> [--publish|--comment <issue-url>|--attach <issue-url>|--status]\n  config reminders [on|off]\n  --version\n`;
+const help = `Agent Learnings\n\nCommands:\n  init [--scope project|user] [--platform all|claude|codex|opencode]\n  target add <id> <github-owner/repo>\n  target list\n  learn add [--json <file|-> [--auto]]\n  learn edit <id> [--json <file|->]\n  learn remove <id> --yes\n  learn list\n  learn show <id>\n  share <id> [--publish|--comment <issue-url>|--attach <issue-url>|--status]\n  share <id> <id>... --publish\n  share --pending\n  config mode [manual|auto]\n  config reminders [on|off]\n  --version\n`;
 const options = {
     json: { type: 'string' },
     scope: { type: 'string' },
@@ -19,6 +19,8 @@ const options = {
     attach: { type: 'string' },
     comment: { type: 'string' },
     yes: { type: 'boolean' },
+    auto: { type: 'boolean' },
+    pending: { type: 'boolean' },
     help: { type: 'boolean', short: 'h' },
     version: { type: 'boolean', short: 'v' },
 };
@@ -110,7 +112,7 @@ async function interactiveEdit(current) {
         close();
     }
 }
-function renderPreview(id, preview) {
+function renderPreview(id, preview, hints = true) {
     const { draft, manifest, policy, findings, related } = preview;
     const lines = [`Repository: ${draft.repo}`, `New issue: ${draft.newIssueUrl}`, `Title: ${draft.title}`, `Maintainer settings: ${describeManifest(draft.repo, manifest)}`];
     lines.push(`Policy: ${policy.status === 'accepted' ? 'accepted' : policy.status === 'redirect' ? `feedback goes to ${policy.url}` : `BLOCKED, ${policy.reason}`}`, '', draft.body, '');
@@ -129,14 +131,15 @@ function renderPreview(id, preview) {
     lines.push('');
     if (preview.sharedAs)
         lines.push(`Already shared: ${preview.sharedAs}`);
-    else if (policy.status === 'blocked' || findings.some(item => item.severity === 'block'))
+    else if (!ready(preview))
         lines.push('Not ready to share. Fix the problems above, for example with agent-learnings learn edit.');
-    else {
+    else if (hints) {
         lines.push(`To submit after review: agent-learnings share ${id} --publish`);
         lines.push(`To add it to an existing issue instead: agent-learnings share ${id} --comment <issue-url>`);
     }
     return `${lines.join('\n')}\n`;
 }
+const ready = (preview) => !preview.sharedAs && preview.policy.status !== 'blocked' && !preview.findings.some(item => item.severity === 'block');
 function warnSensitive(learning) {
     for (const finding of scanFields(learningFields(learning)).filter(item => item.severity === 'warn')) {
         process.stderr.write(`Warning: ${describeFinding(finding)}. Review before sharing.\n`);
@@ -181,9 +184,11 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
         return;
     }
     if (command === 'learn' && action === 'add') {
-        expect(p, v, 2, ['json'], 'learn add [--json <file|->]');
+        expect(p, v, 2, ['json', 'auto'], 'learn add [--json <file|-> [--auto]]');
+        if (v.auto && v.json === undefined)
+            throw new Error('Usage: agent-learnings learn add --json <file|-> --auto');
         const draft = v.json === undefined ? await interactiveDraft() : await readJsonInput(v.json);
-        const learning = await addLearning(root, draft);
+        const learning = await addLearning(root, draft, { auto: v.auto });
         output.write(`Saved learning ${learning.id}\n`);
         warnSensitive(learning);
         return;
@@ -208,17 +213,49 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
     if (command === 'learn' && action === 'list') {
         expect(p, v, 2, [], 'learn list');
         for (const item of await listLearnings(root))
-            output.write(`${item.id}\t${item.target}\t${item.platform}\t${item.issueStatus ?? 'LOCAL'}\t${effectiveKind(item)}\t${effectiveCategory(item)}\n`);
+            output.write(`${item.id}\t${item.target}\t${item.platform}\t${item.issueStatus ?? 'LOCAL'}\t${effectiveKind(item)}\t${effectiveCategory(item)}\t${item.origin ?? '-'}\n`);
         return;
     }
     if (command === 'learn' && action === 'show') {
         expect(p, v, 3, [], 'learn show <id>');
         const learning = await getLearning(root, p[2]);
-        output.write(`ID: ${learning.id}\nTarget: ${learning.target}\nPlatform: ${learning.platform}\nVersion: ${learning.version ?? 'unknown'}\nKind: ${effectiveKind(learning)}\nComponent: ${learning.component ?? '-'}\nCategory: ${effectiveCategory(learning)}\nSituation: ${learning.situation}\nChange: ${learning.change}\nResult: ${learning.result}\nIssue: ${learning.issueUrl ?? 'not shared'}\n${learning.commentUrl ? `Comment: ${learning.commentUrl}\n` : ''}Status: ${learning.issueStatus ?? 'LOCAL'}\n`);
+        output.write(`ID: ${learning.id}\nTarget: ${learning.target}\nPlatform: ${learning.platform}\nVersion: ${learning.version ?? 'unknown'}\nKind: ${effectiveKind(learning)}\nComponent: ${learning.component ?? '-'}\nCategory: ${effectiveCategory(learning)}\n${learning.origin ? `Origin: ${learning.origin}\n` : ''}Situation: ${learning.situation}\nChange: ${learning.change}\nResult: ${learning.result}\nIssue: ${learning.issueUrl ?? 'not shared'}\n${learning.commentUrl ? `Comment: ${learning.commentUrl}\n` : ''}Status: ${learning.issueStatus ?? 'LOCAL'}\n`);
         return;
     }
     if (command === 'share') {
-        const usage = 'share <id> [--publish|--comment <issue-url>|--attach <issue-url>|--status]';
+        const usage = 'share <id> [--publish|--comment <issue-url>|--attach <issue-url>|--status] | share <id> <id>... --publish | share --pending';
+        if (v.pending) {
+            expect(p, v, 1, ['pending'], usage);
+            const pending = (await listLearnings(root)).filter(item => item.origin === 'auto' && !item.issueUrl).reverse();
+            if (!pending.length) {
+                output.write('No auto-saved learnings are waiting to be shared.\n');
+                return;
+            }
+            const approvable = [];
+            for (const item of pending) {
+                const preview = await previewShare(root, item.id);
+                if (ready(preview))
+                    approvable.push(item.id);
+                output.write(`=== Learning ${item.id} ===\n${renderPreview(item.id, preview, false)}\n`);
+            }
+            output.write(approvable.length
+                ? `To publish the approved ones together: agent-learnings share ${approvable.join(' ')} --publish\n`
+                : 'None of these is ready to share yet.\n');
+            return;
+        }
+        if (v.publish && p.length > 2) {
+            expect(p, v, p.length, ['publish'], usage);
+            for (const id of p.slice(1)) {
+                try {
+                    output.write(`${id}: ${await publishIssue(root, id)}\n`);
+                }
+                catch (error) {
+                    process.stderr.write(`Error: ${id}: ${error.message}\n`);
+                    process.exitCode = 1;
+                }
+            }
+            return;
+        }
         expect(p, v, 2, ['publish', 'status', 'attach', 'comment'], usage);
         const id = p[1];
         const modes = ['publish', 'status', 'attach', 'comment'].filter(key => v[key] !== undefined);
@@ -241,6 +278,23 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
             return;
         }
         output.write(renderPreview(id, await previewShare(root, id)));
+        return;
+    }
+    if (command === 'config' && action === 'mode') {
+        const usage = 'config mode [manual|auto]';
+        if (p.length === 2) {
+            expect(p, v, 2, [], usage);
+            const configured = await getMode(root);
+            const fromEnv = envMode(process.env);
+            const source = fromEnv !== undefined ? 'AGENT_LEARNINGS_MODE' : configured !== undefined ? '.agent-learnings/config.json' : 'default';
+            output.write(`Mode: ${fromEnv ?? configured ?? 'manual'} (${source})\n`);
+            return;
+        }
+        expect(p, v, 3, [], usage);
+        if (!modes.includes(p[2]))
+            throw new Error(`Usage: agent-learnings ${usage}`);
+        await setMode(root, p[2]);
+        output.write(`Mode ${p[2]} for this project (.agent-learnings/config.json). AGENT_LEARNINGS_MODE overrides this per user.${p[2] === 'auto' ? ' Agents may now save learnings without asking; publishing still needs approval.' : ''}\n`);
         return;
     }
     if (command === 'config' && action === 'reminders') {

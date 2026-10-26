@@ -3,13 +3,15 @@ import { lstat, mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findProjectRoot } from './project.js';
-import { getReminders, writeReplace } from './store.js';
+import { autoCaptureInstructions } from './skills.js';
+import { getMode, getReminders, modes, writeReplace, type Mode } from './store.js';
 
-// Opt-in end-of-turn reminders. Hooks report which components a session used; the state keeps only a hash of
-// the session id and component names, never prompts, tool input or output.
+// Opt-in end-of-turn reminders and auto mode. Hooks report which components a session used; the state keeps only a
+// hash of the session id and component names, never prompts, tool input or output.
 
 export type HookAction = 'use' | 'stop' | 'end';
-export interface HookEvent { action: HookAction; sessionId: string; components: string[]; cwd?: string; format: 'text' | 'claude' }
+// continued: the agent is already continuing because of a Stop hook (Claude Code stop_hook_active).
+export interface HookEvent { action: HookAction; sessionId: string; components: string[]; cwd?: string; format: 'text' | 'claude'; continued?: boolean }
 export interface HookOptions { env?: NodeJS.ProcessEnv; stateDir?: string; now?: number }
 interface State { v: 1; components: string[]; reminded: boolean }
 
@@ -41,7 +43,7 @@ function claude(event: string, payload: Record<string, unknown>): HookEvent | un
     if (typeof payload.command_source !== 'string' || /^built-?in$/i.test(payload.command_source)) return undefined;
     return { ...base, action: 'use', components: component('command', payload.command_name) };
   }
-  if (event === 'Stop') return { ...base, action: 'stop', components: [] };
+  if (event === 'Stop') return { ...base, action: 'stop', components: [], continued: payload.stop_hook_active === true };
   if (event === 'SessionEnd') return { ...base, action: 'end', components: [] };
   return undefined;
 }
@@ -72,6 +74,15 @@ export function envReminders(env: NodeJS.ProcessEnv): boolean | undefined {
 
 export function remindersEnabled(env: NodeJS.ProcessEnv, configured: boolean | undefined): boolean {
   return envReminders(env) ?? configured ?? false;
+}
+
+export function envMode(env: NodeJS.ProcessEnv): Mode | undefined {
+  const value = env.AGENT_LEARNINGS_MODE?.trim().toLowerCase();
+  return modes.includes(value as Mode) ? value as Mode : undefined;
+}
+
+export function effectiveMode(env: NodeJS.ProcessEnv, configured: Mode | undefined): Mode {
+  return envMode(env) ?? configured ?? 'manual';
 }
 
 export function stateDir(env: NodeJS.ProcessEnv): string {
@@ -116,14 +127,15 @@ function message(components: string[], format: HookEvent['format']): string {
   return `agent-learnings: this session used ${names}. If something worked well or could be better, run ${command} to record it.`;
 }
 
-export async function takeReminder(event: HookEvent, dir: string, now = Date.now()): Promise<string | undefined> {
+// Returns the session's components the first time it is called for a session that used any, then nothing.
+export async function claimReminder(event: HookEvent, dir: string, now = Date.now()): Promise<string[] | undefined> {
   if (!(await ensureDir(dir))) return undefined;
   const path = statePath(dir, event.sessionId);
   const state = await readState(path);
   await cleanupState(dir, now);
   if (state.reminded || !state.components.length) return undefined;
   await writeReplace(path, JSON.stringify({ ...state, reminded: true }));
-  return message(state.components, event.format);
+  return state.components;
 }
 
 export async function cleanupState(dir: string, now = Date.now(), maxAgeMs = dayMs): Promise<number> {
@@ -143,11 +155,21 @@ export async function cleanupState(dir: string, now = Date.now(), maxAgeMs = day
   return removed;
 }
 
-async function enabled(env: NodeJS.ProcessEnv, cwd: string | undefined): Promise<boolean> {
-  const fromEnv = envReminders(env);
-  if (fromEnv !== undefined) return fromEnv;
-  if (!cwd) return false;
-  try { return remindersEnabled(env, await getReminders(await findProjectRoot(cwd))); } catch { return false; }
+async function settings(env: NodeJS.ProcessEnv, cwd: string | undefined): Promise<{ reminders: boolean; mode: Mode }> {
+  const fromEnv = { reminders: envReminders(env), mode: envMode(env) };
+  if ((fromEnv.reminders !== undefined && fromEnv.mode !== undefined) || !cwd) {
+    return { reminders: fromEnv.reminders ?? false, mode: fromEnv.mode ?? 'manual' };
+  }
+  try {
+    const root = await findProjectRoot(cwd);
+    return { reminders: remindersEnabled(env, await getReminders(root)), mode: effectiveMode(env, await getMode(root)) };
+  } catch {
+    return { reminders: fromEnv.reminders ?? false, mode: fromEnv.mode ?? 'manual' };
+  }
+}
+
+function autoCommand(env: NodeJS.ProcessEnv): string {
+  return env.CLAUDE_PLUGIN_ROOT ? `node "${join(env.CLAUDE_PLUGIN_ROOT, 'dist', 'cli.js')}"` : 'agent-learnings';
 }
 
 // Hook entry point. It never throws and returns '' when there is nothing to print, so it cannot break the host agent.
@@ -164,13 +186,23 @@ export async function runHook(spec: string, raw: string, options: HookOptions = 
       await cleanupState(dir, options.now);
       return '';
     }
-    if (!(await enabled(env, event.cwd))) return '';
+    const { reminders, mode } = await settings(env, event.cwd);
+    if (!reminders && mode !== 'auto') return '';
     if (event.action === 'use') {
       await recordUse(event, dir);
       return '';
     }
-    const text = await takeReminder(event, dir, options.now);
-    if (!text) return '';
+    // Never ask twice in a row: the agent is already working on a previous Stop hook request.
+    if (mode === 'auto' && event.continued) return '';
+    const components = await claimReminder(event, dir, options.now);
+    if (!components) return '';
+    if (mode === 'auto') {
+      const reason = autoCaptureInstructions(autoCommand(env), components);
+      return event.format === 'claude'
+        ? JSON.stringify({ decision: 'block', reason, systemMessage: 'agent-learnings auto mode: checking this session for learnings worth saving' })
+        : reason;
+    }
+    const text = message(components, event.format);
     return event.format === 'claude' ? JSON.stringify({ systemMessage: text }) : text;
   } catch (error) {
     if (env.AGENT_LEARNINGS_DEBUG === '1') process.stderr.write(`agent-learnings hook: ${(error as Error).message}\n`);

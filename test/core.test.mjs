@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initSkills } from '../plugins/agent-learnings/dist/install.js';
-import { addTarget, getTarget, addLearning, listLearnings, getLearning, updateLearning, editLearning, removeLearning, withLearningLock, effectiveKind, effectiveCategory } from '../plugins/agent-learnings/dist/store.js';
+import { addTarget, getTarget, addLearning, listLearnings, getLearning, updateLearning, editLearning, removeLearning, withLearningLock, effectiveKind, effectiveCategory, getMode, setMode } from '../plugins/agent-learnings/dist/store.js';
 import { refreshIssue } from '../plugins/agent-learnings/dist/github.js';
 
 const project = () => mkdtemp(join(tmpdir(), 'agent-learnings-'));
@@ -233,4 +233,27 @@ test('secrets are refused before anything is written and are not echoed', async 
   const record = await addLearning(root, draft);
   await assert.rejects(editLearning(root, record.id, { result: `token ${token}` }), /Refusing to save this edit/);
   assert.equal((await getLearning(root, record.id)).result, draft.result);
+});
+
+test('auto-saved learnings are marked in the front matter only', async () => {
+  const root = await project();
+  const auto = await addLearning(root, draft, { auto: true });
+  const markdown = await readFile(join(root, '.agent-learnings/learnings', `${auto.id}.md`), 'utf8');
+  assert.match(markdown, /\ncreatedAt: ".*"\norigin: "auto"\n/);
+  assert.ok(markdown.endsWith(v01.slice(v01.indexOf('# Learning'))));
+  assert.equal((await getLearning(root, auto.id)).origin, 'auto');
+  assert.equal((await updateLearning(root, auto.id, { issueStatus: 'OPEN' })).origin, 'auto');
+  const manual = await addLearning(root, draft);
+  assert.doesNotMatch(await readFile(join(root, '.agent-learnings/learnings', `${manual.id}.md`), 'utf8'), /origin:/);
+});
+
+test('mode is stored in the project config and validated', async () => {
+  const root = await project();
+  assert.equal(await getMode(root), undefined);
+  await addTarget(root, 'superpowers', 'obra/superpowers');
+  await setMode(root, 'auto');
+  assert.equal(await getMode(root), 'auto');
+  assert.equal((await getTarget(root, 'superpowers')).repo, 'obra/superpowers');
+  await writeFile(join(root, '.agent-learnings/config.json'), '{"schemaVersion":1,"targets":{},"mode":"yolo"}');
+  await assert.rejects(getMode(root), /config mode must be manual or auto/);
 });

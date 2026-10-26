@@ -24,3 +24,5 @@ Run only when the user explicitly asks to capture feedback or a learning. Never 
 4. Report the saved learning id and any warnings the CLI printed.
 5. If `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" target list` has no repository for the target, look for the component's source repository: the `repository` or `homepage` field of its plugin manifest, or the marketplace it was installed from (`claude plugin marketplace list --json` in Claude Code, `~/.codex/config.toml` in Codex). Confirm it with the user, then run `node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" target add <target> <owner/repo>`.
 6. Offer to share the learning with the maintainers as a separate step (the share-learning skill). Never publish a learning just because it was saved.
+
+The `--auto` flag of `learn add` is reserved for auto mode, where the plugin hook asks you to save without approval. Do not use it otherwise.

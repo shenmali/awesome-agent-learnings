@@ -6,9 +6,10 @@ Agent Learnings is a common feedback mechanism for the AI components you work wi
 
 Works in **Claude Code**, **Codex** and **OpenCode**.
 
-- **Nothing happens without you.** Every save and every publish needs your explicit approval.
-- **No transcripts.** Only the three fields you approve leave your machine: situation, change tried, observed result.
-- **No surprise uploads.** Nothing is recorded in the background, nothing is used for training, and upstream components are never changed automatically.
+- **You decide what is published.** Nothing reaches GitHub without your explicit approval.
+- **Manual or automatic saving.** By default you approve every learning before it is saved. In [auto mode](#auto-mode-claude-code), your agent saves worthwhile learnings on its own and you review them all at once before sharing.
+- **No transcripts.** Only a short situation, change tried and observed result are stored, never the conversation.
+- **No surprise uploads.** Nothing is used for training, and upstream components are never changed automatically.
 
 ---
 
@@ -18,6 +19,7 @@ Works in **Claude Code**, **Codex** and **OpenCode**.
 - [Use cases](#use-cases)
 - [Quick start](#quick-start)
 - [Step by step: from experience to issue](#step-by-step-from-experience-to-issue)
+- [Auto mode](#auto-mode-claude-code)
 - [Feedback reminders](#feedback-reminders-claude-code-opt-in)
 - [CLI reference](#cli-reference)
 - [What a learning contains](#what-a-learning-contains)
@@ -261,6 +263,46 @@ The skill runs `agent-learnings share <id> --status` to refresh whether the issu
 
 Unshared learnings can be edited (`learn edit`) or removed (`learn remove --yes`). Shared ones are locked so the issue and the record never disagree.
 
+## Auto mode (Claude Code)
+
+Don't want to approve every learning? In auto mode the agent captures learnings on its own, and you only review them in one batch before anything is shared.
+
+**Turn it on**
+
+```sh
+agent-learnings config mode auto       # for the whole project (stored in .agent-learnings/config.json)
+```
+
+or ask `/agent-learnings:manage-learnings` to switch to auto mode. To use it only yourself, set `AGENT_LEARNINGS_MODE=auto` in your environment, for example in the `env` block of Claude Code's `settings.json`. `AGENT_LEARNINGS_MODE=manual` turns it off for you even when the project uses auto mode.
+
+**What happens**
+
+1. You work as usual. The plugin notes which skills, subagents, MCP servers and plugin commands the session used (names only).
+2. At the end of the first turn that used one, Claude Code shows `agent-learnings auto mode: checking this session for learnings worth saving`, and the agent decides whether something is worth reporting: a bug, a workaround, a change that clearly helped, a regression or notable praise. This happens once per session.
+3. If there is, it saves the learning without asking and tells you in one line:
+   ```
+   Saved learning 20261026-a1b2c3d4 automatically; review and share it with /agent-learnings:share-learning.
+   ```
+   If not, it says so and stops. Auto-saved learnings are marked `origin: auto` and show `auto` in `learn list`.
+4. When you are ready, run `/agent-learnings:share-learning` and ask for pending learnings. The agent runs `agent-learnings share --pending`, which shows the preview of every unshared auto-saved learning:
+   ```
+   === Learning 20261026-a1b2c3d4 ===
+   Repository: obra/superpowers
+   Title: [agent-learnings] bug: brainstorming - ...
+   ...
+   === Learning 20261026-e5f6a7b8 ===
+   ...
+   To publish the approved ones together: agent-learnings share 20261026-a1b2c3d4 20261026-e5f6a7b8 --publish
+   ```
+5. Approve all, some or none in one reply. The approved ones are published together; the rest can be edited, commented onto an existing issue, or removed.
+
+**What stays the same**
+
+- Publishing always needs your approval. Auto mode never opens issues or comments by itself.
+- The privacy scan still applies: drafts with tokens or keys are refused, and the agent is told not to copy conversation text or personal details.
+- At most one check per session, and none when no component was used.
+- Auto mode needs the Claude Code plugin hooks. In Codex and OpenCode, saving stays manual.
+
 ## Feedback reminders (Claude Code, opt-in)
 
 Want a nudge when there might be something worth reporting? Turn on reminders, and at the end of a session's first turn that used a skill, subagent, MCP server or plugin command, Claude Code shows you one line:
@@ -273,7 +315,7 @@ agent-learnings: this session used skill:superpowers:brainstorming, mcp:github. 
 - **Just for you:** set `AGENT_LEARNINGS_REMINDERS=1` (or `0` to silence a project setting), for example in the `env` block of Claude Code's `settings.json`.
 - **What is stored:** only a hash of the session id and component names, deleted when the session ends or after a day. The reminder is shown to you, not sent to the model. When reminders are off, nothing is stored.
 
-Reminders are off by default and are not yet available in Codex or OpenCode.
+Reminders are off by default and are not yet available in Codex or OpenCode. In auto mode the reminder is replaced by the automatic check.
 
 ## CLI reference
 
@@ -285,15 +327,19 @@ The skills drive the CLI for you, but you can use it directly from any directory
 | `target add <id> <owner/repo>` | Map a component id to its GitHub repository |
 | `target list` | Show mappings |
 | `learn add [--json <file\|->]` | Save a learning (interactive prompts without `--json`) |
-| `learn list` | id, target, platform, status, kind, category |
+| `learn add --json <file\|-> --auto` | Save without approval, marked as auto-saved (used by auto mode) |
+| `learn list` | id, target, platform, status, kind, category, origin |
 | `learn show <id>` | Full record |
 | `learn edit <id> [--json <file\|->]` | Change an unshared learning |
 | `learn remove <id> --yes` | Delete a learning (a shared issue stays on GitHub) |
 | `share <id>` | Preview only: issue text, maintainer settings, privacy, related issues |
 | `share <id> --publish` | Open a new issue |
+| `share <id> <id>... --publish` | Publish several approved learnings at once; failures are reported per id |
+| `share --pending` | Preview every unshared auto-saved learning, with one combined publish command |
 | `share <id> --comment <issue-url>` | Add the learning to an existing issue |
 | `share <id> --attach <issue-or-comment-url>` | Link a manually submitted issue or comment |
 | `share <id> --status` | Refresh open/closed state |
+| `config mode [manual\|auto]` | Show or change the project mode |
 | `config reminders [on\|off]` | Show or change the project reminder setting |
 | `--version`, `--help` | |
 
@@ -378,6 +424,7 @@ Set `"accepting": false` to opt out, or `"feedbackUrl"` to send people to a form
 
 | Variable | Effect |
 |---|---|
+| `AGENT_LEARNINGS_MODE` | `manual` or `auto`: overrides the project mode |
 | `AGENT_LEARNINGS_REMINDERS` | `1`/`on` or `0`/`off`: overrides the project reminder setting |
 | `AGENT_LEARNINGS_GH` | Path of the GitHub CLI to use instead of `gh` |
 | `AGENT_LEARNINGS_STATE_DIR` | Where reminder state is kept (default: the plugin data directory, or a private folder in the system temp directory) |
