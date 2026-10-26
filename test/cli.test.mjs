@@ -82,3 +82,37 @@ test('CLI interactive add fails instead of silently exiting when input ends', as
   assert.equal(result.status, 1);
   assert.match(result.stderr, /nothing was saved/);
 });
+
+test('CLI edits, shows and removes a learning', async () => {
+  const cwd = await project();
+  run(cwd, ['target', 'add', 'superpowers', 'obra/superpowers']);
+  const draft = { target: 'superpowers', platform: 'claude', situation: 'x', change: 'y', result: 'z' };
+  const id = run(cwd, ['learn', 'add', '--json', '-'], JSON.stringify(draft)).stdout.match(/\d{8}-[a-f0-9]{8}/)?.[0];
+  assert.ok(id);
+  const edited = run(cwd, ['learn', 'edit', id, '--json', '-'], JSON.stringify({ kind: 'skill', component: 'brainstorming', category: 'bug' }));
+  assert.equal(edited.status, 0, edited.stderr);
+  assert.match(edited.stdout, /Updated learning/);
+  const shown = run(cwd, ['learn', 'show', id]).stdout;
+  assert.match(shown, /Kind: skill\nComponent: brainstorming\nCategory: bug/);
+  assert.match(run(cwd, ['learn', 'list']).stdout, new RegExp(`${id}\\tsuperpowers\\tclaude\\tLOCAL\\tskill\\tbug`));
+  run(cwd, ['share', id, '--attach', 'https://github.com/obra/superpowers/issues/3']);
+  assert.match(run(cwd, ['learn', 'edit', id, '--json', '-'], '{"result":"w"}').stderr, /already shared/);
+  assert.match(run(cwd, ['learn', 'remove', id]).stderr, /--yes/);
+  const removed = run(cwd, ['learn', 'remove', id, '--yes']);
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.match(removed.stdout, /issues\/3 remains/);
+  assert.match(run(cwd, ['learn', 'show', id]).stderr, /not found/);
+});
+
+test('CLI warns about personal details and refuses secrets', async () => {
+  const cwd = await project();
+  const draft = { target: 'superpowers', platform: 'codex', situation: 'Asked alice@company.io', change: 'y', result: 'z' };
+  const warned = run(cwd, ['learn', 'add', '--json', '-'], JSON.stringify(draft));
+  assert.equal(warned.status, 0, warned.stderr);
+  assert.match(warned.stderr, /Warning: possible email address in situation/);
+  const token = 'np' + 'm_' + 'Q1w2'.repeat(9);
+  const refused = run(cwd, ['learn', 'add', '--json', '-'], JSON.stringify({ ...draft, situation: `Used ${token}` }));
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /npm token/);
+  assert.ok(!refused.stderr.includes(token));
+});

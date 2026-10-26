@@ -4,7 +4,8 @@ import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initSkills } from '../dist/install.js';
-import { addTarget, getTarget, addLearning, listLearnings, getLearning, updateLearning } from '../dist/store.js';
+import { addTarget, getTarget, addLearning, listLearnings, getLearning, updateLearning, editLearning, removeLearning, withLearningLock, effectiveKind, effectiveCategory } from '../dist/store.js';
+import { refreshIssue } from '../dist/github.js';
 
 const project = () => mkdtemp(join(tmpdir(), 'agent-learnings-'));
 const draft = { target: 'superpowers', platform: 'codex', situation: 'Plans missed review gates', change: 'Add a final review step', result: 'Review caught a missing test', version: '7.0.1' };
@@ -81,4 +82,136 @@ test('manual body edits are detected rather than silently discarded', async () =
   const path = join(root, '.agent-learnings/learnings', `${record.id}.md`);
   await writeFile(path, (await readFile(path, 'utf8')).replace('Review caught a missing test', 'Review caught another test'));
   await assert.rejects(getLearning(root, record.id), /body differs/i);
+});
+
+const v01 = [
+  '---',
+  'id: "20261026-0a1b2c3d"',
+  'target: "superpowers"',
+  'platform: "codex"',
+  'version: "7.0.1"',
+  'createdAt: "2026-10-26T08:00:00.000Z"',
+  'content: {"situation":"Plans missed review gates","change":"Add a final review step","result":"Review caught a missing test"}',
+  '---',
+  '',
+  '# Learning: superpowers',
+  '',
+  '## Situation',
+  'Plans missed review gates',
+  '',
+  '## Change',
+  'Add a final review step',
+  '',
+  '## Observed result',
+  'Review caught a missing test',
+  '',
+].join('\n');
+
+async function writeRecord(root, text, id = '20261026-0a1b2c3d') {
+  await mkdir(join(root, '.agent-learnings/learnings'), { recursive: true });
+  const path = join(root, '.agent-learnings/learnings', `${id}.md`);
+  await writeFile(path, text);
+  return path;
+}
+
+test('records written by 0.1.0 still load and round-trip byte for byte', async () => {
+  for (const text of [v01, v01.replace('content:', 'issueUrl: "https://github.com/obra/superpowers/issues/4"\nissueStatus: "OPEN"\ncontent:')]) {
+    const root = await project();
+    const path = await writeRecord(root, text);
+    const record = await getLearning(root, '20261026-0a1b2c3d');
+    assert.equal(record.result, 'Review caught a missing test');
+    assert.equal(effectiveKind(record), 'other');
+    assert.equal(effectiveCategory(record), 'improvement');
+    await updateLearning(root, record.id, {});
+    assert.equal(await readFile(path, 'utf8'), text);
+    assert.equal((await listLearnings(root)).length, 1);
+  }
+  const crlf = await project();
+  await writeRecord(crlf, v01.replace(/\n/g, '\r\n'));
+  assert.equal((await getLearning(crlf, '20261026-0a1b2c3d')).situation, 'Plans missed review gates');
+});
+
+test('component metadata is stored in front matter and the body keeps the 0.1 layout', async () => {
+  const root = await project();
+  const record = await addLearning(root, { ...draft, kind: 'skill', component: 'writing-plans', category: 'bug' });
+  const markdown = await readFile(join(root, '.agent-learnings/learnings', `${record.id}.md`), 'utf8');
+  assert.match(markdown, /\nkind: "skill"\ncomponent: "writing-plans"\ncategory: "bug"\n/);
+  assert.ok(markdown.endsWith(v01.slice(v01.indexOf('# Learning'))));
+  const reloaded = await getLearning(root, record.id);
+  assert.deepEqual([reloaded.kind, reloaded.component, reloaded.category], ['skill', 'writing-plans', 'bug']);
+  const plain = await addLearning(root, draft);
+  assert.doesNotMatch(await readFile(join(root, '.agent-learnings/learnings', `${plain.id}.md`), 'utf8'), /kind:|category:/);
+});
+
+test('learning input is validated strictly', async () => {
+  const root = await project();
+  for (const [input, message] of [
+    [{ ...draft, kind: 'tool' }, /kind must be one of/],
+    [{ ...draft, category: 'idea' }, /category must be one of/],
+    [{ ...draft, component: 'two\nlines' }, /single line/],
+    [{ ...draft, component: 'x'.repeat(81) }, /single line/],
+    [{ ...draft, version: 7 }, /version must be a string/],
+    [{ ...draft, categroy: 'bug' }, /Unknown learning field categroy/],
+    [['not', 'an', 'object'], /must be an object/],
+  ]) await assert.rejects(addLearning(root, input), message);
+  await assert.rejects(readFile(join(root, '.agent-learnings/learnings')), { code: 'ENOENT' });
+});
+
+test('unknown stored values point at a newer agent-learnings', async () => {
+  const root = await project();
+  await writeRecord(root, v01.replace('createdAt:', 'kind: "workflow"\ncreatedAt:'));
+  await assert.rejects(getLearning(root, '20261026-0a1b2c3d'), /newer agent-learnings/);
+});
+
+test('editing changes only the given fields and never adds defaults', async () => {
+  const root = await project();
+  const path = await writeRecord(root, v01);
+  const { learning, changed } = await editLearning(root, '20261026-0a1b2c3d', { result: 'Review caught two missing tests', version: null });
+  assert.equal(changed, true);
+  assert.equal(learning.createdAt, '2026-10-26T08:00:00.000Z');
+  assert.equal(learning.version, undefined);
+  const edited = await readFile(path, 'utf8');
+  assert.doesNotMatch(edited, /kind:|category:|version:/);
+  assert.match(edited, /Review caught two missing tests/);
+  assert.equal((await editLearning(root, '20261026-0a1b2c3d', { result: 'Review caught two missing tests' })).changed, false);
+  assert.equal(await readFile(path, 'utf8'), edited);
+  await assert.rejects(editLearning(root, '20261026-0a1b2c3d', {}), /No fields/);
+  await assert.rejects(editLearning(root, '20261026-0a1b2c3d', { situaton: 'x' }), /Unknown learning field/);
+  await assert.rejects(editLearning(root, '20261026-0a1b2c3d', { situation: '' }), /situation is required/);
+  const tagged = await editLearning(root, '20261026-0a1b2c3d', { kind: 'skill', component: 'brainstorming' });
+  assert.equal(tagged.learning.kind, 'skill');
+  assert.equal((await updateLearning(root, '20261026-0a1b2c3d', { issueStatus: 'OPEN' })).component, 'brainstorming');
+});
+
+test('shared learnings cannot be edited and removing one keeps the issue', async () => {
+  const root = await project();
+  const record = await addLearning(root, draft);
+  await updateLearning(root, record.id, { issueUrl: 'https://github.com/obra/superpowers/issues/5', issueStatus: 'OPEN' });
+  await assert.rejects(editLearning(root, record.id, { result: 'x' }), /already shared/);
+  assert.equal((await removeLearning(root, record.id)).issueUrl, 'https://github.com/obra/superpowers/issues/5');
+  await assert.rejects(getLearning(root, record.id), /not found/);
+});
+
+test('edit, remove and status refresh respect the per-learning lock', async () => {
+  const root = await project();
+  await addTarget(root, 'superpowers', 'obra/superpowers');
+  const record = await addLearning(root, draft);
+  await updateLearning(root, record.id, { issueUrl: 'https://github.com/obra/superpowers/issues/5' });
+  const lock = join(root, '.agent-learnings/learnings', `${record.id}.share.lock`);
+  await writeFile(lock, 'stale');
+  await assert.rejects(editLearning(root, record.id, { result: 'x' }), /in progress/);
+  await assert.rejects(removeLearning(root, record.id), /in progress/);
+  await assert.rejects(refreshIssue(root, record.id, async () => ({ status: 0, stdout: '{"state":"OPEN"}', stderr: '' })), /in progress/);
+  assert.equal(await readFile(lock, 'utf8'), 'stale');
+  await assert.rejects(withLearningLock(root, '../x', async () => {}), /Invalid learning id/);
+});
+
+test('secrets are refused before anything is written and are not echoed', async () => {
+  const root = await project();
+  const token = 'gh' + 'p_' + 'Z9y8'.repeat(9);
+  await assert.rejects(addLearning(root, { ...draft, change: `export GH=${token}` }), error => /GitHub token in change/.test(error.message) && !error.message.includes(token));
+  await assert.rejects(readFile(join(root, '.agent-learnings/learnings')), { code: 'ENOENT' });
+  const record = await addLearning(root, draft);
+  await assert.rejects(editLearning(root, record.id, { result: `token ${token}` }), /Refusing to save this edit/);
+  assert.equal((await getLearning(root, record.id)).result, draft.result);
 });

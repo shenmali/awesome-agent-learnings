@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, open, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getLearning, getTarget, updateLearning } from './store.js';
+import { getLearning, getTarget, updateLearning, withLearningLock } from './store.js';
 
 export interface RunResult { status: number; stdout: string; stderr: string }
 export type GhRunner = (command: string, args: string[]) => Promise<RunResult>;
@@ -15,27 +15,6 @@ export const runGh: GhRunner = (command, args) => new Promise((resolve, reject) 
 });
 
 export interface IssueDraft { repo: string; title: string; body: string; newIssueUrl: string }
-
-async function withShareLock<T>(root: string, id: string, action: () => Promise<T>): Promise<T> {
-  const lock = join(root, '.agent-learnings', 'learnings', `${id}.share.lock`);
-  let handle;
-  try {
-    handle = await open(lock, 'wx');
-    await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n`);
-    await handle.close();
-  } catch (error) {
-    await handle?.close().catch(() => {});
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new Error(`Share in progress for ${id}. If this lock is stale, check GitHub before removing ${lock}`);
-    }
-    throw error;
-  }
-  try {
-    return await action();
-  } finally {
-    await unlink(lock).catch(() => {});
-  }
-}
 
 export async function prepareIssue(root: string, id: string): Promise<IssueDraft> {
   const learning = await getLearning(root, id);
@@ -66,7 +45,7 @@ function needsAuth(stderr: string): boolean {
 
 export async function publishIssue(root: string, id: string, runner: GhRunner = runGh): Promise<string> {
   await getLearning(root, id);
-  return withShareLock(root, id, async () => {
+  return withLearningLock(root, id, async () => {
     const learning = await getLearning(root, id);
     if (learning.issueUrl) throw new Error(`Learning ${id} was already shared: ${learning.issueUrl}`);
     const draft = await prepareIssue(root, id);
@@ -104,7 +83,7 @@ export async function publishIssue(root: string, id: string, runner: GhRunner = 
 
 export async function attachIssue(root: string, id: string, value: string): Promise<string> {
   await getLearning(root, id);
-  return withShareLock(root, id, async () => {
+  return withLearningLock(root, id, async () => {
     const learning = await getLearning(root, id);
     if (learning.issueUrl) throw new Error(`Learning ${id} was already shared: ${learning.issueUrl}`);
     const draft = await prepareIssue(root, id);
@@ -120,13 +99,16 @@ export async function attachIssue(root: string, id: string, value: string): Prom
 }
 
 export async function refreshIssue(root: string, id: string, runner: GhRunner = runGh): Promise<'OPEN' | 'CLOSED'> {
-  const learning = await getLearning(root, id);
-  if (!learning.issueUrl) throw new Error(`Learning ${id} has no submitted issue`);
-  const draft = await prepareIssue(root, id);
-  const response = await runner('gh', ['issue', 'view', learning.issueUrl, '--repo', draft.repo, '--json', 'state']);
-  if (response.status !== 0) throw new Error(`GitHub issue status failed: ${response.stderr.trim() || `exit ${response.status}`}`);
-  const state = (JSON.parse(response.stdout) as { state?: string }).state;
-  if (state !== 'OPEN' && state !== 'CLOSED') throw new Error('GitHub returned an unexpected issue state');
-  await updateLearning(root, id, { issueStatus: state });
-  return state;
+  await getLearning(root, id);
+  return withLearningLock(root, id, async () => {
+    const learning = await getLearning(root, id);
+    if (!learning.issueUrl) throw new Error(`Learning ${id} has no submitted issue`);
+    const draft = await prepareIssue(root, id);
+    const response = await runner('gh', ['issue', 'view', learning.issueUrl, '--repo', draft.repo, '--json', 'state']);
+    if (response.status !== 0) throw new Error(`GitHub issue status failed: ${response.stderr.trim() || `exit ${response.status}`}`);
+    const state = (JSON.parse(response.stdout) as { state?: string }).state;
+    if (state !== 'OPEN' && state !== 'CLOSED') throw new Error('GitHub returned an unexpected issue state');
+    await updateLearning(root, id, { issueStatus: state });
+    return state;
+  });
 }
